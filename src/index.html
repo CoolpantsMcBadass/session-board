@@ -1,0 +1,606 @@
+<meta charset="utf-8">
+<title>Session Board</title>
+<style>
+  :root {
+    --bg: #11131a;
+    --bg-row: #171a23;
+    --bg-row-hover: #1e222e;
+    --line: #262b38;
+    --ink: #e7eaf0;
+    --ink-dim: #8b93a5;
+    --working: #3ddc84;
+    --waiting: #ffb531;
+    --stalled: #d98a3a;
+    --blocked: #ff6b5e;
+    --parked: #5f7794;
+    --closed: #3c424e;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    color: var(--ink);
+    background: transparent;
+    overflow: hidden;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  .panel {
+    height: 100%;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  /* No native drag region anywhere: macOS gives a drag region's double-click to
+     the system title-bar action instead of to the page, so the whole bar is
+     driven from script to keep click, double-click and drag ours. */
+  .grip {
+    height: 26px;
+    flex: 0 0 auto;
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink-dim);
+  }
+  .grip:active { cursor: grabbing; }
+  .grip button {
+    background: none; border: 0; padding: 4px 14px; cursor: pointer;
+    color: inherit; display: flex; align-items: center; border-radius: 5px;
+  }
+  .grip button:hover { background: #1d2230; color: var(--ink); }
+  .grip svg { opacity: .5; }
+  .grip button:hover svg { opacity: .9; }
+
+  /* ---- collapsed rail ---- */
+  .rail { flex: 1; justify-content: flex-start; display: flex; flex-direction: column; align-items: center; gap: 9px; padding: 4px 0 10px; }
+  .rail .count {
+    font-size: 11px; font-weight: 600; letter-spacing: .02em;
+    color: var(--ink-dim); margin-bottom: 2px;
+  }
+  .rail .count.alert { color: var(--waiting); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+  .dot.working { background: var(--working); animation: breathe 1.6s ease-in-out infinite; }
+  .dot.waiting { background: var(--waiting); box-shadow: 0 0 0 3px rgba(255,181,49,.16); }
+  .dot.stalled { background: var(--stalled); }
+  .dot.blocked { background: var(--blocked); box-shadow: 0 0 0 3px rgba(255,107,94,.18); }
+  .dot.parked  { background: var(--parked); }
+  .dot.closed  { background: var(--closed); }
+  @keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: .42; } }
+
+  /* ---- expanded list ---- */
+  .head {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 0 12px 9px; border-bottom: 1px solid var(--line);
+  }
+  .head h1 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
+  .head .sub { font-size: 11px; color: var(--ink-dim); margin-left: auto; }
+  .list { flex: 1; overflow-y: auto; padding: 8px; }
+  .list::-webkit-scrollbar { width: 8px; }
+  .list::-webkit-scrollbar-thumb { background: #262b38; border-radius: 4px; }
+  .group { font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: #5a6274; padding: 10px 4px 5px; }
+  .row {
+    display: grid; grid-template-columns: 14px 1fr; gap: 9px;
+    padding: 8px 9px; border-radius: 8px; cursor: pointer;
+    background: var(--bg-row); margin-bottom: 5px; align-items: start;
+  }
+  .row:hover { background: var(--bg-row-hover); }
+  .row .dot { margin-top: 4px; }
+  .row .title { font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .meta { font-size: 10.5px; color: var(--ink-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row.is-waiting .title { color: var(--waiting); }
+  .row.is-blocked .title { color: var(--blocked); }
+  .row.live { padding: 10px; background: #191d28; cursor: pointer; }
+  .row.live:hover { background: #1f2432; }
+  .actions { display: flex; gap: 6px; margin-top: 7px; }
+  .actions button, .disclosure {
+    font: inherit; font-size: 10.5px; color: var(--ink-dim);
+    background: #222836; border: 1px solid #2d3444; border-radius: 5px;
+    padding: 3px 7px; cursor: pointer;
+  }
+  .actions button:hover { color: var(--ink); border-color: #3d475b; }
+  .ask { margin-top: 7px; }
+  .ask textarea {
+    width: 100%; height: 54px; resize: none; font: inherit; font-size: 11.5px;
+    color: var(--ink); background: #0d1017; border: 1px solid #2d3444;
+    border-radius: 6px; padding: 6px 7px; outline: none;
+  }
+  .ask textarea:focus { border-color: #44506a; }
+  .answer {
+    margin-top: 7px; background: #0d1017; border: 1px solid var(--line);
+    border-radius: 6px; padding: 8px 9px; font-size: 11px; line-height: 1.5;
+    color: #c3cad8; max-height: 210px; overflow-y: auto; white-space: pre-wrap;
+    user-select: text;
+  }
+  .answer.err { color: #ff9a90; }
+  .answer .who { color: #5f6a7e; display: block; margin-bottom: 4px; font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
+  .disclosure { width: 100%; text-align: left; margin: 10px 0 6px; }
+  .empty { color: #5a6274; font-size: 11.5px; padding: 18px 6px; text-align: center; }
+  .row.is-closed { background: transparent; }
+  .row.is-closed .title { color: #9aa2b2; font-weight: 400; }
+  .foot {
+    display: flex; gap: 5px; align-items: center; flex-wrap: nowrap;
+    padding: 7px 9px; border-top: 1px solid var(--line); font-size: 10px; color: var(--ink-dim);
+  }
+  .foot button {
+    font: inherit; color: var(--ink-dim); background: none; border: 0;
+    cursor: pointer; padding: 2px 3px; white-space: nowrap; flex: 0 0 auto;
+  }
+  .foot #src {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+  }
+  .foot button:hover { color: var(--ink); }
+  .foot .push { margin-left: auto; }
+  .toast {
+    position: absolute; left: 10px; right: 10px; bottom: 36px;
+    background: #222838; border: 1px solid #343b4d; border-radius: 7px;
+    padding: 7px 9px; font-size: 10.5px; color: var(--ink);
+    opacity: 0; transition: opacity .18s; pointer-events: none;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .toast.show { opacity: 1; }
+  /* ---- map ---- */
+  #map {
+    position: relative; flex: 1; min-height: 0; overflow: hidden;
+    background:
+      radial-gradient(circle at 1px 1px, #1d2230 1px, transparent 0) 0 0 / 22px 22px,
+      var(--bg);
+  }
+  .wires { position: absolute; inset: 0; pointer-events: none; color: #3f4a61; }
+  .edge {
+    fill: none; stroke: #3f4a61; stroke-width: 1.6;
+    marker-end: url(#arrow); pointer-events: none;
+  }
+  /* invisible, fat, and the only thing that takes clicks */
+  .edge-hit {
+    fill: none; stroke: transparent; stroke-width: 14;
+    pointer-events: stroke; cursor: pointer;
+  }
+  .edge.answered { stroke: #4c7f6a; }
+  .edge.sel { stroke: var(--ink); stroke-width: 2.2; }
+  .edge.temp { stroke: var(--waiting); stroke-dasharray: 4 3; marker-end: none; }
+  .edge.busy {
+    stroke: var(--waiting); stroke-width: 2.4;
+    stroke-dasharray: 7 5; animation: flow .7s linear infinite;
+  }
+  @keyframes flow { to { stroke-dashoffset: -24; } }
+  .node {
+    position: absolute; width: 172px; height: 60px; box-sizing: border-box;
+    background: #1a1f2b; border: 1px solid #2b3242; border-radius: 9px;
+    padding: 8px 9px; cursor: grab; user-select: none;
+  }
+  .node:active { cursor: grabbing; }
+  .node.is-working { border-color: #2f5f45; }
+  .node.is-waiting { border-color: #6b5420; }
+  .node.is-blocked { border-color: #6d3a35; }
+  .node-top { display: flex; align-items: center; gap: 6px; }
+  .node-title {
+    font-size: 11.5px; font-weight: 500; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .node-meta { font-size: 10px; color: var(--ink-dim); margin-top: 4px; margin-left: 16px; }
+  .port {
+    position: absolute; right: -6px; top: 50%; transform: translateY(-50%);
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #39445a; border: 2px solid var(--bg); cursor: crosshair;
+  }
+  .port:hover { background: var(--waiting); }
+  #composer {
+    border-top: 1px solid var(--line); padding: 9px 11px; background: #141822;
+    max-height: 290px; overflow-y: auto;
+  }
+  .comp-head { display: flex; align-items: center; gap: 7px; font-size: 11px; margin-bottom: 7px; }
+  .comp-head strong { font-weight: 600; }
+  .comp-head button {
+    font: inherit; font-size: 10px; color: var(--ink-dim); background: #222836;
+    border: 1px solid #2d3444; border-radius: 5px; padding: 2px 6px; cursor: pointer;
+  }
+  .comp-head button:first-of-type { margin-left: auto; }
+  #composer textarea {
+    width: 100%; height: 44px; resize: none; font: inherit; font-size: 11.5px;
+    color: var(--ink); background: #0d1017; border: 1px solid #2d3444;
+    border-radius: 6px; padding: 6px 7px; outline: none;
+  }
+  .comp-actions { margin-top: 6px; }
+  .comp-actions button {
+    font: inherit; font-size: 10.5px; color: var(--ink); background: #273047;
+    border: 1px solid #38425c; border-radius: 5px; padding: 4px 9px; cursor: pointer;
+  }
+  .comp-actions button:disabled { opacity: .55; cursor: default; }
+  [hidden] { display: none !important; }
+</style>
+
+<div class="panel">
+  <div class="grip" id="grip">
+    <button id="griptoggle" title="collapse or expand">
+      <svg width="16" height="5" viewBox="0 0 16 5" fill="currentColor"><circle cx="2" cy="2.5" r="1.3"/><circle cx="8" cy="2.5" r="1.3"/><circle cx="14" cy="2.5" r="1.3"/></svg>
+    </button>
+  </div>
+
+  <div class="rail" id="rail"></div>
+
+  <div id="full" hidden style="display:flex;flex-direction:column;flex:1;min-height:0">
+    <div class="head">
+      <h1>Sessions</h1>
+      <span class="sub" id="sub"></span>
+    </div>
+    <div class="list" id="list"></div>
+    <div id="map" hidden></div>
+    <div id="composer" hidden></div>
+    <div class="foot">
+      <button id="collapse">collapse</button>
+      <button id="view">map</button>
+      <button id="tile">tile</button>
+      <button id="new">+ new</button>
+      <button id="refresh">refresh</button>
+      <span class="push" id="src"></span>
+      <button id="quit">quit</button>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+</div>
+
+<script src="canvas.js"></script>
+<script>
+  const LABEL = {
+    working: 'working',
+    waiting: 'waiting on you',
+    blocked: 'blocked on a prompt',
+    stalled: 'no output 2m+',
+    parked: 'parked',
+    closed: '',
+  };
+  let expanded = false;
+  let current = { sessions: [], liveCount: 0, waitingCount: 0 };
+  let showRecent = false;
+  let mapMode = false;
+  let openAsk = null;            // session id whose ask box is open
+  const answers = Object.create(null);  // session id -> { text, err }
+
+  const el = (id) => document.getElementById(id);
+
+  function age(sec) {
+    if (sec < 60) return sec + 's';
+    if (sec < 3600) return Math.round(sec / 60) + 'm';
+    if (sec < 86400) return Math.round(sec / 3600) + 'h';
+    return Math.round(sec / 86400) + 'd';
+  }
+
+  function folder(s) {
+    return s.cwdShort || '?';
+  }
+
+  function renderRail() {
+    const live = current.sessions.filter((s) => s.pid);
+    const waiting = current.waitingCount;
+    const bits = [`<div class="count ${waiting ? 'alert' : ''}">${live.length}</div>`];
+    for (const s of live.slice(0, 14)) {
+      bits.push(`<div class="dot ${s.state}" title="${esc(s.title)} (${LABEL[s.state]})"></div>`);
+    }
+    if (!live.length) bits.push('<div class="dot closed" title="no live sessions"></div>');
+    el('rail').innerHTML = bits.join('');
+  }
+
+  // How many grid slots are already taken, so a new window lands in the next one.
+  function liveSlots() {
+    return current.sessions.filter((s) => s.pid && s.tty).length;
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  function renderList() {
+    const live = current.sessions.filter((s) => s.pid);
+    const dead = current.sessions.filter((s) => !s.pid).slice(0, 14);
+    const out = [];
+
+    if (live.length) {
+      for (const s of live) out.push(liveRow(s));
+    } else {
+      out.push('<div class="empty">no sessions running</div>');
+    }
+
+    if (dead.length) {
+      out.push(`<button class="disclosure" id="disc">${showRecent ? '▾' : '▸'} recent (${dead.length})</button>`);
+      if (showRecent) for (const s of dead) out.push(deadRow(s));
+    }
+
+    el('list').innerHTML = out.join('');
+    el('sub').textContent = current.waitingCount
+      ? `${current.waitingCount} waiting on you`
+      : `${live.length} running`;
+
+    // Say when the registry and the process scan disagree, rather than quietly
+    // papering over it: a missed session would otherwise read as closed.
+    const missed = current.registryMissed || 0;
+    const unmatched = current.unmatchedPids || 0;
+    const srcEl = el('src');
+    srcEl.textContent = (missed || unmatched) ? `${current.source} ⚠${missed + unmatched}` : current.source;
+    srcEl.title = (missed || unmatched)
+      ? `${missed} live session(s) the registry did not report, ${unmatched} process(es) with no transcript`
+      : 'session source: ' + current.source;
+    srcEl.style.color = (missed || unmatched) ? 'var(--waiting)' : '';
+    wire();
+  }
+
+  function liveRow(s) {
+    const meta = s.untouched
+      ? `${LABEL[s.state]} · no prompt yet · ${folder(s)}`
+      : `${LABEL[s.state]} · ${age(s.idleSec)} quiet · ${folder(s)}`;
+    const a = answers[s.sessionId];
+    return `<div class="row live is-${s.state}" data-id="${s.sessionId}">
+      <div class="dot ${s.state}"></div>
+      <div style="min-width:0">
+        <div class="title">${esc(s.title)}</div>
+        <div class="meta">${esc(meta)}${peerOf(s) ? ' · ' + esc(peerOf(s)) : ''}</div>
+        <div class="actions">
+          <button data-act="ask" data-id="${s.sessionId}">ask it</button>
+          <button data-act="resume" data-id="${s.sessionId}">copy cmd</button>
+          ${peerOf(s) ? `<button data-act="peer" data-id="${s.sessionId}">copy handle</button>` : ''}
+        </div>
+        ${openAsk === s.sessionId ? askBox(s) : ''}
+        ${a ? `<div class="answer ${a.err ? 'err' : ''}"><span class="who">${a.err ? 'failed' : 'answered from its history'}</span>${esc(a.text)}</div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  // Only interactive sessions register as messageable peers, and a background
+  // session's "name" is just its generated title, so it is not a peer handle.
+  function peerOf(s) {
+    if (s.kind !== 'interactive') return null;
+    if (!s.peerName || s.peerName === s.title) return null;
+    return s.peerName;
+  }
+
+  function askBox(s) {
+    return `<div class="ask">
+      <textarea id="ask-input" placeholder="ask this session something (it answers from its own history)"></textarea>
+      <div class="actions">
+        <button data-act="send" data-id="${s.sessionId}">send</button>
+        <button data-act="cancel" data-id="${s.sessionId}">cancel</button>
+      </div>
+    </div>`;
+  }
+
+  function deadRow(s) {
+    return `<div class="row is-closed" data-id="${s.sessionId}">
+      <div class="dot ${s.state}"></div>
+      <div style="min-width:0">
+        <div class="title">${esc(s.title)}</div>
+        <div class="meta">${esc(age(s.idleSec) + ' ago · ' + folder(s))} · click to reopen</div>
+      </div>
+    </div>`;
+  }
+
+  function wire() {
+    const disc = el('disc');
+    if (disc) disc.onclick = () => { showRecent = !showRecent; renderList(); };
+
+    for (const b of el('list').querySelectorAll('button[data-act]')) {
+      b.onclick = (ev) => {
+        ev.stopPropagation();
+        const s = current.sessions.find((x) => x.sessionId === b.dataset.id);
+        if (!s) return;
+        const act = b.dataset.act;
+        if (act === 'ask') { openAsk = s.sessionId; renderList(); el('ask-input').focus(); }
+        else if (act === 'cancel') { openAsk = null; renderList(); }
+        else if (act === 'peer') window.board.copyPeer(peerOf(s)).then((n) => toast('copied: ' + n));
+        else if (act === 'resume') window.board.copyResume(s).then((c) => toast('copied: ' + c));
+        else if (act === 'send') send(s);
+      };
+    }
+
+    // Clicking a running session jumps to the terminal window it lives in.
+    for (const node of el('list').querySelectorAll('.row.live')) {
+      node.onclick = () => {
+        const s = current.sessions.find((x) => x.sessionId === node.dataset.id);
+        if (!s) return;
+        if (!s.tty) { toast('no terminal window for this one'); return; }
+        window.board.focusSession(s.tty).then((res) => {
+          if (!res.ok) toast(res.error || 'could not reach that window');
+        });
+      };
+    }
+
+    for (const node of el('list').querySelectorAll('.row.is-closed')) {
+      node.onclick = () => {
+        const s = current.sessions.find((x) => x.sessionId === node.dataset.id);
+        if (!s) return;
+        toast('opening ' + s.title + '…');
+        window.board.openSessionWindow({ cwd: s.cwd, resumeId: s.sessionId, slot: liveSlots() })
+          .then((res) => toast(res.ok ? res.out : res.error));
+      };
+    }
+  }
+
+  function send(s, override) {
+    const box = el('ask-input');
+    const question = override || (box ? box.value : '');
+    if (!question.trim()) { toast('type a question first'); return; }
+    openAsk = null;
+    answers[s.sessionId] = { text: 'asking…', err: false };
+    renderList();
+    window.board.consult({ sessionId: s.sessionId, cwd: s.cwd, question }).then((res) => {
+      answers[s.sessionId] = res.ok
+        ? { text: res.answer, err: false }
+        : { text: res.error, err: true };
+      renderList();
+    });
+  }
+
+  let toastTimer;
+  function toast(msg) {
+    const t = el('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  function paint() {
+    if (!expanded) { renderRail(); return; }
+    if (mapMode) window.Canvas.update(current.sessions);
+    else renderList();
+  }
+
+  // Which view the panel shows. Split out of setMapMode so the main process can
+  // put the renderer back on the list without a round trip back through it.
+  function applyView(on) {
+    mapMode = on;
+    el('list').hidden = on;
+    el('map').hidden = !on;
+    el('composer').hidden = true;
+    el('view').textContent = on ? 'list' : 'map';
+    el('sub').textContent = on
+      ? 'drag to link · right-click a wire to unlink · double-click to open'
+      : '';
+  }
+
+  function setMapMode(on) {
+    applyView(on);
+    window.board.setMap(on).then(() => paint());
+  }
+
+  window.board.onSnapshot((data) => {
+    current = data;
+    if (openAsk) return;
+    if (mapMode && window.Canvas.busy()) return;
+    paint();
+  });
+  window.board.onTick(() => {
+    if (openAsk) return;              // never re-render while a question is typed
+    if (mapMode && window.Canvas.busy()) return;  // nor mid-drag on the map
+    paint();
+  });
+  window.board.onExpanded((v, map) => {
+    expanded = v;
+    el('rail').hidden = v;
+    el('full').hidden = !v;
+    if (typeof map === 'boolean' && map !== mapMode) applyView(map);
+    paint();
+  });
+  window.board.onError((m) => toast('collector: ' + m));
+  window.board.onTestClick((id) => el(id).click());
+  window.board.onTestReopen((match) => {
+    showRecent = true;
+    renderList();
+    const s = current.sessions.find((x) => !x.pid && x.title.toLowerCase().includes(match.toLowerCase()));
+    if (!s) { console.log('TESTREOPEN no recent session matching ' + match); return; }
+    const row = document.querySelector(`.row.is-closed[data-id="${s.sessionId}"]`);
+    if (!row) { console.log('TESTREOPEN no row'); return; }
+    console.log('TESTREOPEN clicking ' + s.title + ' (slot ' + liveSlots() + ')');
+    row.click();
+  });
+  window.board.onTestNode((spec) => {
+    const [match, times] = spec.split('|');
+    setMapMode(true);
+    setTimeout(() => {
+      const ok = window.Canvas.simulateNodeTap(match, Number(times) || 1);
+      console.log('TESTNODE tapped ' + match + ' x' + (times || 1) + ': ' + ok);
+    }, 800);
+  });
+  window.board.onTestFocus((tty) => {
+    const s = current.sessions.find((x) => x.tty === tty);
+    if (!s) { console.log('TESTFOCUS no session on ' + tty); return; }
+    const row = document.querySelector(`.row.live[data-id="${s.sessionId}"]`);
+    if (!row) { console.log('TESTFOCUS no row for ' + tty); return; }
+    row.click();
+    console.log('TESTFOCUS clicked row for ' + s.title + ' on ' + tty);
+  });
+
+  window.board.onTestGrip(({ target, move, taps }) => {
+    const node = el(target === 'bar' ? 'grip' : 'griptoggle');
+    const r = node.getBoundingClientRect();
+    const at = (type, dx) => new PointerEvent(type, {
+      bubbles: true, pointerId: 1,
+      clientX: r.left + 6, clientY: r.top + 6,
+      screenX: 500 + (dx || 0), screenY: 400,
+    });
+    for (let i = 0; i < (taps || 1); i++) {
+      node.dispatchEvent(at('pointerdown', 0));
+      if (move) node.dispatchEvent(at('pointermove', move));
+      node.dispatchEvent(at('pointerup', move || 0));
+    }
+  });
+
+  window.board.onAutoAsk(({ match, question }) => {
+    setTimeout(() => {
+      const target = current.sessions.find((s) => s.pid && s.title.toLowerCase().includes(match.toLowerCase()));
+      if (target) send(target, question);
+      else toast('autoask: no live session matching ' + match);
+    }, 900);
+  });
+
+  // One gesture handler for the whole top bar. A drag moves the window; a tap
+  // that goes nowhere is a click. Double-click is timed here rather than left to
+  // the native event, which preventDefault and drag regions both interfere with.
+  function moveGesture(node, { onClick, onDoubleClick } = {}) {
+    const DEAD_ZONE = 4;
+    const DOUBLE_MS = 400;
+    let g = null;
+    let lastTap = 0;
+
+    node.onpointerdown = (ev) => {
+      ev.stopPropagation();
+      g = { x: ev.screenX, y: ev.screenY, travelled: 0 };
+      try { node.setPointerCapture(ev.pointerId); } catch { /* synthetic pointer */ }
+    };
+
+    node.onpointermove = (ev) => {
+      if (!g) return;
+      const dx = ev.screenX - g.x;
+      const dy = ev.screenY - g.y;
+      g.travelled += Math.abs(dx) + Math.abs(dy);
+      if (g.travelled < DEAD_ZONE) return;
+      g.x = ev.screenX;
+      g.y = ev.screenY;
+      window.board.moveBy(dx, dy);
+    };
+
+    node.onpointerup = (ev) => {
+      ev.stopPropagation();
+      try { node.releasePointerCapture(ev.pointerId); } catch { /* not captured */ }
+      const tapped = g && g.travelled < DEAD_ZONE;
+      g = null;
+      if (!tapped) { lastTap = 0; return; }   // a drag is never a tap
+      const now = Date.now();
+      if (now - lastTap < DOUBLE_MS) {
+        lastTap = 0;
+        if (onDoubleClick) onDoubleClick();
+        else if (onClick) onClick();
+      } else {
+        lastTap = now;
+        if (onClick) onClick();
+      }
+    };
+
+    node.onpointercancel = () => { g = null; };
+  }
+
+  // The bar: drag to move, double-click anywhere on it to collapse or expand.
+  moveGesture(el('grip'), { onDoubleClick: () => window.board.toggle() });
+  // The dots: the same drag, but a single click is enough.
+  moveGesture(el('griptoggle'), { onClick: () => window.board.toggle() });
+
+  el('rail').onclick = () => window.board.toggle(true);
+  el('collapse').onclick = () => window.board.toggle(false);
+  el('view').onclick = () => setMapMode(!mapMode);
+  el('new').onclick = () => {
+    toast('opening a new session…');
+    window.board.openSessionWindow({ slot: liveSlots() })
+      .then((res) => toast(res.ok ? res.out : res.error));
+  };
+  el('tile').onclick = () => {
+    const ttys = current.sessions.filter((s) => s.pid && s.tty).map((s) => s.tty);
+    if (!ttys.length) { toast('no terminal sessions to tile'); return; }
+    toast('tiling ' + ttys.length + ' window(s)…');
+    window.board.tileWindows(ttys).then((res) => toast(res.ok ? res.out : res.error));
+  };
+  el('refresh').onclick = () => window.board.refresh().then(() => toast('rescanned'));
+  window.Canvas.init(window.board, { toast });
+  el('quit').onclick = () => window.board.quit();
+</script>

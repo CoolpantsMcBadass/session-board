@@ -1,0 +1,14 @@
+{
+  "name": "session-board",
+  "version": "0.1.0",
+  "description": "Always-on-top strip showing live Claude Code sessions and whether each one is working or waiting on you",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "collect": "node src/collector.js"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^43.2.0"
+  }
+}

@@ -1,0 +1,137 @@
+2026-10-02  v0.1.0  initial build
+
+- collector.js: scans ~/.claude/projects and the process table, matches live claude
+  processes to transcripts by launch cwd, derives working/waiting/parked/stalled/closed
+  from the last content line of each transcript
+- main.js: frameless always-on-top Electron strip pinned to the right edge, collapses to
+  a dot rail and expands to the session list, Cmd+Alt+S toggles
+- index.html: dark panel, status dots, click a row to copy its resume command
+- fixed: live process was matched to the wrong session because transcript cwd drifts as
+  the shell moves; now matched on the launch cwd from the head of the file
+- fixed: first snapshot was emitted before the renderer finished loading and was dropped,
+  leaving a stale first paint; the newest snapshot is now replayed on did-finish-load
+- fixed: collapsed rail was a fixed 780px; height now follows the live session count
+
+2026-10-02  v0.2.0  live sessions first, and a way to ask them things
+
+- collector.js: `claude agents --json` is now the primary source, giving exact
+  pid to session id mapping, the peer name, and a status the transcript cannot
+  show, including 'blocked' for a session halted on a permission prompt
+- collector.js: the process scan still runs as a backstop and the two sources are
+  unioned; a live session the registry omits would otherwise be reported as closed
+- collector.js: excluded `claude daemon run` / `bg-pty-host` / `bg-spare` from the
+  process scan, which were being counted as sessions and produced duplicate rows
+- main.js: consult handler runs `claude --resume <id> --fork-session -p` so a session
+  can be asked about its own history without appending to it or disturbing it
+- index.html: live sessions now carry the panel with per-row actions; recents moved
+  behind a collapsed disclosure; footer reports source and any registry/scan mismatch
+- found by the reviewer session, via the ask feature: trusting the registry alone
+  silently reported omitted sessions as closed, with unmatchedPids: 0 hiding it
+
+2026-10-02  v0.3.0  the map
+
+- renamed the row actions: ask it / open in terminal / copy handle
+- canvas.js: map view with draggable session nodes and drag-to-link ports; positions
+  and links persist in board.json under the app's data dir
+- a link relays a digest of one session's recent conversation into another and brings
+  the reply back; the wire animates while the relay is in flight
+- collector.js: digest() pulls the human asks and assistant prose out of a transcript
+  tail, dropping tool traffic
+- main.js: relay handler, board persistence, wider window in map mode
+- fixed: every ask and relay wrote a new transcript inheriting its parent's title, so
+  the board filled with phantom closed sessions; those are tagged entrypoint sdk-cli
+  and are now hidden
+- fixed, found by the reviewer session over a link: sdk-cli means headless, not fork,
+  so the filter could have hidden a live session started by a script or hook; it now
+  never applies to anything the registry reports as running
+- fixed: nodes placed while the composer was shut ended up underneath it when it opened
+
+2026-10-02  v0.3.1  wires
+
+- wires are straight lines now, and stop at the target node's border so the
+  arrowhead is not hidden underneath it
+- each wire gets an invisible 14px stroke beneath it as the click target; the
+  visible 1.6px line no longer takes pointer events
+- right-click a wire to unlink it without opening the composer
+- the two copies of the edge-drawing maths (full render and mid-drag redraw) are
+  now one wireHtml() used by both
+
+2026-10-02  v0.3.2  grip and resizing
+
+- the dots at the top are now a button that collapses or expands on a single click;
+  they opt out of the drag region, which was swallowing the click before
+- the window is resizable, and the size is remembered per view (rail, list, map) in
+  window.json under the app data dir
+- resizing and view changes keep the right edge and the top where they are, and clamp
+  back on screen if a window ends up off it
+- the rail keeps auto-sizing to the live session count until the user resizes it once
+
+2026-10-02  v0.3.3  drag by the dots
+
+- the three dots now move the window as well as toggling it: a click collapses or
+  expands, a drag moves. They cannot be a native drag region without losing the click,
+  so the move is driven from the renderer and the gestures are separated by a 4px
+  dead zone
+- window moves are sent as deltas, so a drag never has to wait on the window's current
+  position before it can start, and they clamp to keep the panel reachable on screen
+- SB_DEBUG_RESIZE=1 logs every resize with a stack trace, for chasing a size that
+  changes when it should not
+
+2026-10-02  v0.3.4  double-click the bar
+
+- double-click anywhere on the top bar to collapse or expand; a single click there
+  does nothing, and a drag still moves the window
+- removed the native drag region entirely: macOS gives a drag region's double-click to
+  the system title-bar action, so the ondblclick that had been on the bar since v0.1
+  could never have fired. Click, double-click and drag are now all handled in script,
+  with double-click timed rather than left to the native event
+- one gesture handler now serves both the bar and the dots
+- a live session with no prompt typed into it yet is labelled with its peer handle and
+  'no prompt yet', instead of '(starting)'
+
+2026-10-02  v0.3.5  opens top right
+
+- the window now opens in the top right corner under the menu bar, rather than
+  vertically centred on the right edge. Expanding keeps the top edge, so the panel
+  grows downward from there
+
+2026-10-02  v0.4.0  reach the terminal
+
+- clicking a running session in the list brings its Terminal window to the front,
+  matched by the session's controlling tty rather than by window id or title
+- new tile button: sizes every running session's window to 75x20 and grids them,
+  cascading anything past a full screen
+- tiling collapses the board to its pill first; the first version laid a column
+  underneath the expanded panel
+- collector.js: live sessions now carry their tty
+- Terminal.app only; iTerm, VS Code and tmux sessions are not reachable this way
+
+2026-10-02  v0.4.1  double-click a node to open it
+
+- double-clicking a node on the map brings up the terminal that session runs in, the
+  same as clicking a row in the list; single tap does nothing, drag still drags
+- drag distance is measured on the pointer rather than the node, so dragging a node
+  already pinned against an edge is not mistaken for a tap
+
+2026-10-02  v0.4.2  add sessions to the grid
+
+- new '+ new' button opens a fresh session in a Terminal window placed in the next
+  free grid slot at 75x20
+- clicking a session in the recent list reopens it there with claude --resume
+- the grid maths is now one gridSlot() shared by tile and by opening a window, so a
+  session added later lands where tiling would have put it
+- the new window is located by the tty its own tab reports; window 1 happens to be the
+  new one but only by accident, and a recycled tty proves the index is not a handle
+- live rows: 'open in terminal' renamed to 'copy cmd', since clicking the row itself is
+  what opens a terminal now
+- footer no longer wraps to three lines: one line, no wrap, with the source/mismatch
+  readout truncating and carrying the detail in its tooltip
+
+2026-10-02  v0.4.3  reopening comes back to the list
+
+- collapsing the panel while the map is open now clears map mode, so reopening shows
+  the list rather than the canvas
+- the view the panel shows is split out of setMapMode into applyView(), so the main
+  process can put the renderer back on the list without a round trip back through it
+- the expanded message now carries the map state alongside it, which keeps the two
+  copies of that flag, one per process, from drifting apart
