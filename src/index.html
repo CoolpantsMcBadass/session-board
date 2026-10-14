@@ -26,6 +26,7 @@
     -webkit-font-smoothing: antialiased;
   }
   .panel {
+    position: relative;
     height: 100%;
     background: var(--bg);
     border: 1px solid var(--line);
@@ -54,6 +55,17 @@
   .grip button:hover { background: #1d2230; color: var(--ink); }
   .grip svg { opacity: .5; }
   .grip button:hover svg { opacity: .9; }
+
+  /* Window controls ride the top bar, where there is room once the panel is
+     open. The rail is 58px wide and has none: the menu bar icon is the handle
+     for a collapsed board. */
+  .wctl {
+    position: absolute; right: 3px; top: 0; height: 26px;
+    display: flex; align-items: center; gap: 1px;
+  }
+  .wctl button { padding: 5px 6px; }
+  .wctl button.on svg { opacity: .95; }
+  .wctl #close:hover { background: #46211d; color: #ffb3aa; }
 
   /* ---- collapsed rail ---- */
   .rail { flex: 1; justify-content: flex-start; display: flex; flex-direction: column; align-items: center; gap: 9px; padding: 4px 0 10px; }
@@ -188,6 +200,29 @@
     background: #39445a; border: 2px solid var(--bg); cursor: crosshair;
   }
   .port:hover { background: var(--waiting); }
+  /* The bin sits in the map's bottom-left, out of the way of the ring that
+     unplaced nodes land on. Pointer-events off: the drop is decided from the
+     pointer's position, and a node parked over it must stay grabbable. */
+  #trash {
+    position: absolute; left: 12px; bottom: 12px;
+    width: 46px; height: 46px; border-radius: 11px;
+    display: flex; align-items: center; justify-content: center;
+    background: #161b26; border: 1px dashed #2f3647; color: #5a6276;
+    pointer-events: none; opacity: .5;
+    transition: opacity .15s, color .15s, border-color .15s, background .15s, transform .12s;
+  }
+  #trash.armed { opacity: 1; border-color: #495270; color: #8b93a5; }
+  #trash.hot {
+    border-style: solid; border-color: var(--blocked); color: var(--blocked);
+    background: #2a1a1c; transform: scale(1.12);
+  }
+  .trash-cap {
+    position: absolute; left: 50%; bottom: -16px; transform: translateX(-50%);
+    font-size: 9.5px; white-space: nowrap; color: inherit; opacity: 0;
+    transition: opacity .15s;
+  }
+  #trash.hot .trash-cap { opacity: 1; }
+  .node.doomed { opacity: .55; border-color: var(--blocked); }
   #composer {
     border-top: 1px solid var(--line); padding: 9px 11px; background: #141822;
     max-height: 290px; overflow-y: auto;
@@ -211,6 +246,149 @@
   }
   .comp-actions button:disabled { opacity: .55; cursor: default; }
   [hidden] { display: none !important; }
+
+  /* ---- office view ---- */
+  /* The plan is black ink on transparency, and the panel is dark, so the floor
+     needs a light ground under it or the drawing simply is not there. The
+     blueprint class is the other way round: ink inverted to pale lines, no
+     ground, for when the office should sit in the dark panel rather than on
+     a sheet of paper. Which one wins is still an open question, hence both. */
+  /* A row, not a column: the plan is portrait inside a wide window, so it sits
+     against the left edge with a margin and the controls take a fixed strip on
+     the right. Centring the plan would leave a gutter on both sides and anchor
+     it to nothing. The space between the two is deliberate room to grow. */
+  #office { display: flex; flex-direction: row; align-items: stretch; gap: 12px;
+            flex: 1; min-height: 0; padding: 10px 12px 14px 16px; position: relative; }
+  #office[hidden] { display: none; }
+  /* The plan measures itself against this box, so it must hold no padding of
+     its own and must be free to shrink, hence min-width: 0 on a flex child. */
+  /* Shrink-to-fit around the plan, which is sized in code. It cannot be flex:1
+     any more: the chat shares this row, so the plan's width is worked out from
+     the whole view rather than measured from the box it sits in, which would
+     be circular. */
+  #office .stage { flex: 0 0 auto; display: flex; align-items: flex-start; }
+  #office .chat { flex: 1; min-width: 0; display: flex; flex-direction: column;
+                  gap: 6px; border: 1px solid var(--line); border-radius: 4px;
+                  padding: 6px; background: var(--bg-row); }
+  #office .chat-head { display: flex; gap: 6px; flex: 0 0 auto; }
+  #office .chat-head .lead { flex: 1; min-width: 0; font-size: 11px; color: var(--ink);
+                             padding: 3px 2px; overflow: hidden; text-overflow: ellipsis;
+                             white-space: nowrap; }
+  /* One box per session that is not the lead. Current task only: the title the
+     session gave itself, and its state as a colour. No directory, no timings,
+     no buttons. Knowing what each one is doing is the whole job here; anything
+     more is the list view, which is one click away. */
+  #office .others { display: flex; flex-wrap: wrap; gap: 5px; flex: 0 0 auto; }
+  #office .other { display: flex; align-items: center; gap: 5px; max-width: 100%;
+                   font-size: 10px; color: var(--ink-dim); background: var(--bg);
+                   border: 1px solid var(--line); border-radius: 3px;
+                   padding: 3px 7px; cursor: pointer; }
+  #office .other:hover { border-color: var(--ink-dim); }
+  #office .other .pip { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+  #office .other .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Hidden until the box is hovered: five boxes each carrying two always-on
+     controls would read as a toolbar rather than as a list of who is here. */
+  #office .other .go { display: none; color: var(--ink-dim); padding: 0 1px; }
+  #office .other:hover .go { display: inline; }
+  #office .other .go:hover { color: var(--ink); }
+  #office .other .go[data-act="end"]:hover { color: var(--blocked); }
+  /* A session waiting on a permission prompt cannot be answered from here, so
+     the box says so and the only useful thing is to go and look at it. */
+  #office .other.is-blocked { border-color: var(--blocked); color: var(--blocked); }
+  #office .other.is-blocked .go { display: inline; }
+  #office .pop.hire { width: 230px; }
+  #office .fld { display: flex; flex-direction: column; gap: 3px; }
+  #office .fld input, #office .fld textarea, #office .fld select {
+    font: inherit; font-size: 11px; background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 3px; padding: 4px; resize: none; }
+  #office .fld-row { display: flex; gap: 6px; }
+  #office .fld-row button { flex: 1; font: inherit; font-size: 11px; cursor: pointer;
+    background: var(--bg); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 3px; padding: 4px; }
+  #office .fld-row button:hover { background: var(--bg-row-hover); }
+  #office .chat-head button { background: var(--bg); color: var(--ink-dim);
+                              border: 1px solid var(--line); border-radius: 3px;
+                              font: inherit; font-size: 11px; padding: 2px 7px; cursor: pointer; }
+  #office .chat-log { flex: 1; min-height: 0; overflow-y: auto; display: flex;
+                      flex-direction: column; gap: 7px; padding: 2px; font-size: 12px; }
+  #office .chat-box { display: flex; gap: 6px; flex: 0 0 auto; }
+  #office .chat-box textarea { flex: 1; min-width: 0; resize: none; font: inherit;
+                               font-size: 12px; background: var(--bg); color: var(--ink);
+                               border: 1px solid var(--line); border-radius: 3px; padding: 4px; }
+  #office .chat-box button { background: var(--bg); color: var(--ink);
+                             border: 1px solid var(--line); border-radius: 3px;
+                             font: inherit; padding: 0 12px; cursor: pointer; }
+  .msg { white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+  .msg .who { color: var(--ink-dim); font-size: 10px; display: block; margin-bottom: 1px; }
+  .msg.me .body { color: var(--ink); }
+  .msg.them .body { color: var(--working); }
+  .msg.err .body { color: var(--blocked); }
+  /* About an inch. Fixed, so the plan never trades size against the controls. */
+  #office .ctl { flex: 0 0 96px; width: 96px; display: flex; flex-direction: column;
+                 gap: 6px; font-size: 10px; color: var(--ink-dim); overflow-y: auto; }
+  #office .sq { height: 40px; border: 1px solid var(--line); border-radius: 4px;
+                background: var(--bg-row); color: var(--ink); font: inherit;
+                line-height: 1.15; padding: 2px; cursor: pointer; flex: 0 0 auto; }
+  #office .sq:hover { background: var(--bg-row-hover); }
+  /* Pressed state is the border, not the fill, so an active toggle still reads
+     as a control rather than as a filled-in block. */
+  #office .sq.on { border-color: var(--working); color: var(--working); }
+  #office .sq.slot { background: transparent; border-style: dashed; cursor: default; }
+  #office .sq.slot:hover { background: transparent; }
+  #office .sl { display: flex; flex-direction: column; gap: 3px; flex: 0 0 auto; }
+  #office .sl input[type=range] { width: 100%; margin: 0; }
+  /* Anchored beside the strip rather than inside it: .ctl scrolls, and a
+     scrolling box clips anything that tries to escape it sideways. */
+  #office .pop { position: absolute; right: 120px; width: 180px; z-index: 5;
+                 display: flex; flex-direction: column; gap: 9px; font-size: 10px;
+                 color: var(--ink-dim); background: var(--bg-row); padding: 9px;
+                 border: 1px solid var(--line); border-radius: 4px;
+                 box-shadow: 0 4px 14px rgba(0,0,0,.5); }
+  #office .pop[hidden] { display: none; }
+  /* Separates the controls that belong to this view from the board-wide ones
+     below, which do the same thing here as they do in the footer. */
+  #office .rule { flex: 0 0 auto; height: 1px; background: var(--line); margin: 2px 0; }
+  #office .floor { position: relative; flex: 0 0 auto; border-radius: 3px;
+                   background: #e9e5dc; box-shadow: 0 2px 10px rgba(0,0,0,.45); }
+  #office .plan { width: 100%; height: 100%; display: block; }
+  #office .geo, #office .balls { position: absolute; inset: 0; }
+  #office .geo { width: 100%; height: 100%; display: none; overflow: visible; }
+  #office.show-geo .geo { display: block; }
+  #office.blueprint .floor { background: #10141c; }
+  #office.blueprint .plan { filter: invert(1); }
+
+  .geo-office { fill: rgba(80,150,255,.10); stroke: rgba(80,150,255,.75); stroke-width: .003; }
+  .geo-table  { fill: none; stroke: rgba(0,200,120,.8); stroke-width: .004; }
+  .geo-door   { stroke: #15c05a; stroke-width: .010; stroke-linecap: round; }
+  .geo-spine  { stroke: rgba(255,120,200,.75); stroke-width: .004; stroke-dasharray: .02 .014; }
+  .geo-slot   { fill: rgba(0,200,120,.85); }
+  .geo-label  { font-size: .030px; fill: rgba(80,150,255,.95); }
+
+  /* A ball is positioned by its centre, which is what the movement layer
+     reports, so it is nudged back by half its own size rather than the view
+     having to know the radius. */
+  /* Only while something is being carried. A bin sitting permanently on the
+     drawing is clutter, and the drawing is the point of this view. */
+  #office .bin { position: absolute; left: 10px; bottom: 10px; width: 46px; height: 46px;
+                 display: none; align-items: center; justify-content: center;
+                 color: #8a8378; border: 1px dashed #9a9287; border-radius: 6px;
+                 background: rgba(255,255,255,.55); }
+  #office.dragging .bin { display: flex; }
+  #office .bin.hot { color: var(--blocked); border-color: var(--blocked);
+                     border-style: solid; background: rgba(255,107,94,.18); }
+  #office .ball.doomed { opacity: .6; }
+  /* Sessions that have exited. Dimmer than the live boxes, and draggable onto
+     the floor to start them again where they left off. */
+  #office .others.gone .other { opacity: .55; border-style: dashed; cursor: grab; }
+  #office .others.gone .other:hover { opacity: 1; }
+  #office.dropping .stage { outline: 1px dashed var(--working); outline-offset: 3px; }
+  .ball { position: absolute; border-radius: 50%; transform: translate(-50%, -50%); cursor: grab;
+          border: 1px solid rgba(0,0,0,.45); box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+  .ball.is-working { background: var(--working); }
+  .ball.is-waiting { background: var(--waiting); }
+  .ball.is-blocked { background: var(--blocked); }
+  .ball.is-stalled { background: var(--stalled); }
+  .ball.is-parked  { background: var(--parked); }
 </style>
 
 <div class="panel">
@@ -218,6 +396,15 @@
     <button id="griptoggle" title="collapse or expand">
       <svg width="16" height="5" viewBox="0 0 16 5" fill="currentColor"><circle cx="2" cy="2.5" r="1.3"/><circle cx="8" cy="2.5" r="1.3"/><circle cx="14" cy="2.5" r="1.3"/></svg>
     </button>
+    <div class="wctl" id="wctl" hidden>
+      <button id="pin"></button>
+      <button id="stow" title="hide to the menu bar (⌘⌥B)">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="8.3" width="8" height="1.4" rx=".7"/></svg>
+      </button>
+      <button id="close" title="quit Session Board">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 3l6 6M9 3l-6 6"/></svg>
+      </button>
+    </div>
   </div>
 
   <div class="rail" id="rail"></div>
@@ -229,21 +416,84 @@
     </div>
     <div class="list" id="list"></div>
     <div id="map" hidden></div>
+    <div id="office" hidden>
+      <div class="stage">
+        <div class="floor">
+          <img class="plan" src="office/floorplan.png" alt="" draggable="false">
+          <svg class="geo" viewBox="0 0 1 1" preserveAspectRatio="none"></svg>
+          <div class="balls"></div>
+          <div class="bin" title="drop a worker here to end their session">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v6M14 11v6"
+                fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+      <div class="chat" id="chat">
+        <div class="others" id="others"></div>
+      <div class="others gone" id="recent"></div>
+        <div class="chat-head">
+          <span class="lead" id="chatwho">no lead</span>
+          <button id="chatnew" title="start again from the lead's latest state">fresh</button>
+        </div>
+        <div class="chat-log" id="chatlog"></div>
+        <div class="chat-box">
+          <textarea id="chatin" rows="2" placeholder="ask this session something…"></textarea>
+          <button id="chatsend">send</button>
+        </div>
+      </div>
+      <div class="ctl">
+        <button class="sq" id="ogeo">geometry</button>
+        <button class="sq" id="oinvert">blueprint</button>
+        <button class="sq" id="omeet">meet at<br>table</button>
+        <div class="rule"></div>
+        <button class="sq" id="oview">map</button>
+        <button class="sq" id="otile">tile</button>
+        <button class="sq" id="ohide">put away</button>
+        <button class="sq" id="onew">+ new</button>
+        <button class="sq" id="orefresh">refresh</button>
+        <button class="sq" id="ocollapse">collapse</button>
+        <div class="rule"></div>
+        <button class="sq" id="omore" title="size and speed">⋯</button>
+        <div class="sq slot"></div>
+      </div>
+      <div class="pop hire" id="ohirepop" hidden>
+        <label class="fld">name<input id="hname" maxlength="40" placeholder="Illustrator"></label>
+        <label class="fld">purpose<textarea id="hwhy" rows="4"
+          placeholder="What this one is for. Becomes part of its system prompt, so it shapes the whole session rather than scrolling away."></textarea></label>
+        <label class="fld">permissions<select id="hmode">
+          <option value="manual">ask me every time</option>
+          <option value="acceptEdits">edits without asking</option>
+          <option value="plan">plan only, no changes</option>
+        </select></label>
+        <div class="fld-row"><button id="hgo">hire</button><button id="hcancel">cancel</button></div>
+      </div>
+      <div class="pop" id="opop" hidden>
+        <label class="sl">ball size<input type="range" id="osize" min="6" max="34" value="27"></label>
+        <label class="sl">walk speed<input type="range" id="ospeed" min="2" max="60" value="27"></label>
+      </div>
+    </div>
     <div id="composer" hidden></div>
-    <div class="foot">
+    <div class="foot" id="foot">
       <button id="collapse">collapse</button>
       <button id="view">map</button>
       <button id="tile">tile</button>
-      <button id="new">+ new</button>
+      <button id="new-opus" title="open a new session on Opus">+opus</button>
+      <button id="new-sonnet" title="open a new session on Sonnet">+sonnet</button>
+      <button id="new-haiku" title="open a new session on Haiku">+haiku</button>
       <button id="refresh">refresh</button>
       <span class="push" id="src"></span>
-      <button id="quit">quit</button>
     </div>
   </div>
   <div class="toast" id="toast"></div>
 </div>
 
 <script src="canvas.js"></script>
+<script src="office/geometry.js"></script>
+<script src="office/routes.js"></script>
+<script src="office/agents.js"></script>
+<script src="office/view.js"></script>
 <script>
   const LABEL = {
     working: 'working',
@@ -254,9 +504,14 @@
     closed: '',
   };
   let expanded = false;
-  let current = { sessions: [], liveCount: 0, waitingCount: 0 };
+  // The expanded panel shows exactly one of these, and the foot button walks
+  // the ring. Kept as a name rather than a pair of booleans so there is no
+  // state where both the map and the office believe they are open.
+  const NEXT_VIEW = { list: 'map', map: 'office', office: 'list' };
+  let view = 'list';
+  let current = { sessions: [], links: [], liveCount: 0, waitingCount: 0 };
   let showRecent = false;
-  let mapMode = false;
+  let onTop = true;
   let openAsk = null;            // session id whose ask box is open
   const answers = Object.create(null);  // session id -> { text, err }
 
@@ -443,47 +698,70 @@
 
   function paint() {
     if (!expanded) { renderRail(); return; }
-    if (mapMode) window.Canvas.update(current.sessions);
+    if (view === 'office') {
+      paintChatHeads();
+      syncHideBtn();
+      window.Office.update(current.sessions, current.links);
+    }
+    else if (view === 'map') window.Canvas.update(current.sessions);
     else renderList();
   }
 
-  // Which view the panel shows. Split out of setMapMode so the main process can
+  // Which view the panel shows. Split out of setView so the main process can
   // put the renderer back on the list without a round trip back through it.
-  function applyView(on) {
-    mapMode = on;
-    el('list').hidden = on;
-    el('map').hidden = !on;
+  function applyView(name) {
+    view = NEXT_VIEW[name] ? name : 'list';
+    el('list').hidden = view !== 'list';
+    el('map').hidden = view !== 'map';
+    el('office').hidden = view !== 'office';
     el('composer').hidden = true;
-    el('view').textContent = on ? 'list' : 'map';
-    el('sub').textContent = on
-      ? 'drag to link · right-click a wire to unlink · double-click to open'
-      : '';
+    // The office keeps an animation loop open, so it has to be told when it
+    // stops being the visible view, not merely hidden behind a style.
+    window.Office.setVisible(view === 'office');
+    if (view !== 'office') { showMore(false); showHire(false); }
+    // The office carries the board's own actions in its side strip, so the
+    // footer would be a second copy of the same five buttons. It stays in the
+    // DOM either way: the strip drives it rather than reimplementing it.
+    el('foot').hidden = view === 'office';
+    el('view').textContent = NEXT_VIEW[view];
+    el('oview').textContent = NEXT_VIEW[view];
+    el('sub').textContent = view === 'map'
+      ? 'drag to link · right-click a wire to unlink · drop on the bin to end'
+      : view === 'office' ? 'one office per live session' : '';
   }
 
-  function setMapMode(on) {
-    applyView(on);
-    window.board.setMap(on).then(() => paint());
+  function setView(name) {
+    applyView(name);
+    // The main process resolves the name itself and is the one that sizes the
+    // window to it, so its answer wins. applyView runs first so the panel does
+    // not wait a round trip to change, and resyncs only if the two disagree.
+    window.board.setView(name).then((resolved) => {
+      if (resolved && resolved !== view) applyView(resolved);
+      paint();
+    });
   }
 
   window.board.onSnapshot((data) => {
     current = data;
     if (openAsk) return;
-    if (mapMode && window.Canvas.busy()) return;
+    if (view === 'map' && window.Canvas.busy()) return;
     paint();
   });
   window.board.onTick(() => {
     if (openAsk) return;              // never re-render while a question is typed
-    if (mapMode && window.Canvas.busy()) return;  // nor mid-drag on the map
+    if (view === 'map' && window.Canvas.busy()) return;  // nor mid-drag on the map
     paint();
   });
-  window.board.onExpanded((v, map) => {
+  window.board.onExpanded((v, v2) => {
     expanded = v;
     el('rail').hidden = v;
     el('full').hidden = !v;
-    if (typeof map === 'boolean' && map !== mapMode) applyView(map);
+    el('wctl').hidden = !v;
+    if (typeof v2 === 'string' && v2 !== view) applyView(v2);
     paint();
   });
   window.board.onError((m) => toast('collector: ' + m));
+  window.board.onChrome((c) => { onTop = !!c.onTop; paintPin(); });
   window.board.onTestClick((id) => el(id).click());
   window.board.onTestReopen((match) => {
     showRecent = true;
@@ -497,11 +775,22 @@
   });
   window.board.onTestNode((spec) => {
     const [match, times] = spec.split('|');
-    setMapMode(true);
+    setView('map');
     setTimeout(() => {
       const ok = window.Canvas.simulateNodeTap(match, Number(times) || 1);
       console.log('TESTNODE tapped ' + match + ' x' + (times || 1) + ': ' + ok);
     }, 800);
+  });
+  window.board.onTestTrash((match) => {
+    // The board starts on the rail, where there is no map and so no bin to
+    // drop anything on. Open it first, then switch views.
+    window.board.toggle(true).then(() => {
+      setTimeout(() => setView('map'), 400);
+      setTimeout(() => {
+        const r = window.Canvas.simulateTrash(match);
+        console.log('TESTTRASH dragged ' + match + ' onto the bin: ' + JSON.stringify(r));
+      }, 1300);
+    });
   });
   window.board.onTestFocus((tty) => {
     const s = current.sessions.find((x) => x.tty === tty);
@@ -588,12 +877,15 @@
 
   el('rail').onclick = () => window.board.toggle(true);
   el('collapse').onclick = () => window.board.toggle(false);
-  el('view').onclick = () => setMapMode(!mapMode);
-  el('new').onclick = () => {
-    toast('opening a new session…');
-    window.board.openSessionWindow({ slot: liveSlots() })
+  el('view').onclick = () => setView(NEXT_VIEW[view]);
+  function newSession(model) {
+    toast(`opening a new ${model} session…`);
+    window.board.openSessionWindow({ model, slot: liveSlots() })
       .then((res) => toast(res.ok ? res.out : res.error));
-  };
+  }
+  el('new-opus').onclick = () => newSession('opus');
+  el('new-sonnet').onclick = () => newSession('sonnet');
+  el('new-haiku').onclick = () => newSession('haiku');
   el('tile').onclick = () => {
     const ttys = current.sessions.filter((s) => s.pid && s.tty).map((s) => s.tty);
     if (!ttys.length) { toast('no terminal sessions to tile'); return; }
@@ -602,5 +894,330 @@
   };
   el('refresh').onclick = () => window.board.refresh().then(() => toast('rescanned'));
   window.Canvas.init(window.board, { toast });
-  el('quit').onclick = () => window.board.quit();
+  window.Office.init(window.board, {
+    toast,
+    // Clicking a ball is the quickest way to say who you mean, and it answers
+    // the "which one is that" question the colours alone cannot.
+    onPick: (sessionId) => setLead(sessionId),
+    onBin: (sessionId) => endWorker(sessionId),
+  });
+
+  // The controls are buttons now rather than checkboxes, so each one carries
+  // its own on/off state. Returning it keeps the label and the thing it
+  // controls from ever disagreeing.
+  function toggleBtn(id, apply) {
+    const b = el(id);
+    b.onclick = () => { apply(b.classList.toggle('on')); };
+  }
+  // The strip's board-wide buttons click the footer's, rather than carrying a
+  // second copy of the logic. Everything those five do (tiling, opening a
+  // session, cycling the view) stays defined in exactly one place.
+  for (const [from, to] of [['oview', 'view'], ['otile', 'tile'],
+                            ['orefresh', 'refresh'], ['ocollapse', 'collapse']]) {
+    el(from).onclick = () => el(to).click();
+  }
+
+  // The chat talks to a fork of whichever session is picked, so the fork's own
+  // id is the conversation: hold it and later messages continue, drop it and
+  // the next message starts again from that session's current state.
+  let chatForkId = null;
+  let chatBusy = false;
+
+  // Which session the chat talks to. Remembered across restarts because it is a
+  // standing choice about how the board is being used, not a per-session one,
+  // and falling back to a different session each launch would make the chat
+  // mean something different every time it opened.
+  let leadId = null;
+  try { leadId = localStorage.getItem('officeLead'); } catch { leadId = null; }
+
+  function setLead(sessionId) {
+    if (!sessionId || sessionId === leadId) return;
+    leadId = sessionId;
+    try { localStorage.setItem('officeLead', sessionId); } catch { /* private window */ }
+    // A different session is a different conversation, so the fork and the
+    // transcript go with it rather than carrying over silently.
+    chatForkId = null;
+    el('chatlog').innerHTML = '';
+    paintChatHeads();
+  }
+
+  function chatTarget() {
+    const live = current.sessions.filter((s) => s.pid);
+    const chosen = live.find((s) => s.sessionId === leadId);
+    if (chosen) return chosen;
+    // Nothing chosen yet, or the chosen one has gone. The busiest session is
+    // the best guess at who is running things, and it is only a default: the
+    // moment a ball or a box is clicked it stops guessing.
+    return live.slice().sort((a, b) => (a.idleSec || 0) - (b.idleSec || 0))[0] || null;
+  }
+
+  function paintChatHeads() {
+    const lead = chatTarget();
+    el('chatwho').textContent = lead ? (lead.title || lead.sessionId.slice(0, 8)) : 'no live sessions';
+    el('chatwho').title = lead ? 'chatting with ' + (lead.title || lead.sessionId) : '';
+
+    const others = current.sessions.filter((s) => s.pid && (!lead || s.sessionId !== lead.sessionId));
+    // A session held at a permission prompt says what it is asking for, since
+    // "waiting on you" without a subject means going and looking anyway.
+    const why = (s) => {
+      if (s.state !== 'blocked') return LABEL[s.state] || s.state;
+      const p = s.pendingTool;
+      const asked = p ? (p.what ? p.name + ': ' + p.what : 'to use ' + p.name) : (s.waitingFor || 'an answer');
+      return 'waiting for you to allow ' + asked;
+    };
+    const html = others.map((s) => `<div class="other" data-id="${esc(s.sessionId)}"
+        title="${esc(s.title || '')} · ${esc(why(s))}">
+        <span class="pip" style="background: var(--${esc(s.state)})"></span>
+        <span class="what">${esc(s.title || s.sessionId.slice(0, 8))}</span>
+        <span class="go" data-act="show" title="bring its window back">show</span>
+        <span class="go" data-act="end" title="end this session">&times;</span></div>`).join('');
+    // Sessions that have exited, newest first and only a few: this is a way
+    // back to what you were just doing, not a history. Dragging one onto the
+    // floor starts it again where it left off.
+    const gone = current.sessions.filter((x) => !x.pid).slice(0, 4);
+    const goneHtml = gone.map((x) => `<div class="other" draggable="true"
+        data-id="${esc(x.sessionId)}" data-cwd="${esc(x.cwd || '')}"
+        title="${esc(x.title || '')} · drag onto the floor to reopen">
+        <span class="pip" style="background: var(--closed)"></span>
+        <span class="what">${esc(x.title || x.sessionId.slice(0, 8))}</span></div>`).join('');
+    if (el('recent').dataset.sig !== goneHtml) {
+      el('recent').dataset.sig = goneHtml;
+      el('recent').innerHTML = goneHtml;
+      for (const chip of el('recent').querySelectorAll('.other')) {
+        chip.ondragstart = (e) => {
+          e.dataTransfer.setData('text/plain', chip.dataset.id);
+          e.dataTransfer.effectAllowed = 'copy';
+          el('office').classList.add('dropping');
+        };
+        chip.ondragend = () => el('office').classList.remove('dropping');
+      }
+    }
+
+    // Only rewritten when it would actually look different, because this runs
+    // on every poll and replacing the nodes would kill any hover underway.
+    if (el('others').dataset.sig === html) return;
+    el('others').dataset.sig = html;
+    el('others').innerHTML = html;
+    for (const box of el('others').querySelectorAll('.other')) {
+      const row = current.sessions.find((x) => x.sessionId === box.dataset.id);
+      box.classList.toggle('is-blocked', !!row && row.state === 'blocked');
+      box.onclick = (e) => {
+        const act = e.target.dataset && e.target.dataset.act;
+        if (act === 'show') { e.stopPropagation(); showSession(box.dataset.id); return; }
+        if (act === 'end') { e.stopPropagation(); endWorker(box.dataset.id); return; }
+        setLead(box.dataset.id);
+      };
+    }
+  }
+
+  function say(cls, who, body) {
+    const log = el('chatlog');
+    const d = document.createElement('div');
+    d.className = 'msg ' + cls;
+    d.innerHTML = `<span class="who">${esc(who)}</span><span class="body">${esc(body)}</span>`;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+    return d;
+  }
+
+  async function chatSend() {
+    if (chatBusy) return;
+    const text = el('chatin').value.trim();
+    const target = chatTarget();
+    if (!text) return;
+    if (!target) { say('err', 'board', 'nobody to talk to'); return; }
+    el('chatin').value = '';
+    say('me', 'you', text);
+    chatBusy = true;
+    const pending = say('them', target.title || 'session', 'thinking…');
+    const res = await window.board.chat({
+      sessionId: target.sessionId,
+      forkId: chatForkId,
+      cwd: target.cwd,
+      message: text,
+    });
+    chatBusy = false;
+    pending.remove();
+    if (res.ok) {
+      chatForkId = res.forkId || chatForkId;
+      say('them', target.title || 'session', res.answer || '(said nothing)');
+    } else {
+      say('err', 'board', res.error || 'no answer');
+    }
+  }
+
+  el('chatsend').onclick = chatSend;
+  el('chatin').onkeydown = (e) => {
+    // Enter sends, since this is a chat box and not a document. A newline is
+    // still reachable with shift, which is the convention everywhere else.
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); chatSend(); }
+  };
+  el('chatnew').onclick = () => {
+    chatForkId = null;
+    el('chatlog').innerHTML = '';
+    say('err', 'board', 'started again from that session\'s latest state');
+  };
+
+
+  toggleBtn('ogeo', (on) => window.Office.setOverlay(on));
+  toggleBtn('oinvert', (on) => el('office').classList.toggle('blueprint', on));
+  // Size and speed live behind the overflow rather than on the strip. They are
+  // set once and then left alone, and a narrow permanent surface is worth more
+  // to the things actually pressed.
+  function showMore(on) {
+    const pop = el('opop');
+    pop.hidden = !on;
+    el('omore').classList.toggle('on', on);
+    // Lined up with its own button, so it reads as belonging to it rather than
+    // appearing from nowhere.
+    if (on) pop.style.top = el('omore').offsetTop + 'px';
+  }
+  // Putting the terminals away is what makes the office stand in for them, so
+  // the same button has to bring them back; a one-way hide would be a trap.
+  // Only windows this app hid are brought back, so anything closed or
+  // minimised by hand stays as the user left it.
+  // Whether the terminals are away is asked of Terminal rather than remembered,
+  // so restarting the board while they are hidden still offers to bring them
+  // back instead of forgetting it ever hid them.
+  let termsAway = false;
+  function paintHideBtn() {
+    el('ohide').textContent = termsAway ? 'bring back' : 'put away';
+    el('ohide').classList.toggle('on', termsAway);
+  }
+  async function syncHideBtn() {
+    const away = await window.board.sessionsAway();
+    if (away > 0 === termsAway) return;
+    termsAway = away > 0;
+    paintHideBtn();
+  }
+  el('ohide').onclick = async () => {
+    const lead = chatTarget();
+    const res = termsAway
+      ? await window.board.showSessions()
+      : await window.board.hideSessions(lead && lead.sessionId);
+    toast(res.ok ? res.out : res.error);
+    await syncHideBtn();
+  };
+
+  // A session blocked on a permission prompt cannot be answered from here: the
+  // prompt lives in that terminal's own display and nothing outside it can
+  // reach the keystroke. Bringing the window back and focusing it is the whole
+  // of what the board can honestly offer.
+  async function showSession(sessionId) {
+    const row = current.sessions.find((s) => s.sessionId === sessionId);
+    if (!row || !row.tty) { toast('no terminal for that one'); return; }
+    await window.board.showSessions();
+    const res = await window.board.focusSession(row.tty);
+    if (!res.ok) toast(res.error);
+    await syncHideBtn();
+  }
+
+  // Dropping a closed session on the floor starts it again. --resume is what
+  // makes that a continuation rather than a new session that happens to know
+  // nothing, so the work picks up where it stopped.
+  const stage = document.querySelector('#office .stage');
+  stage.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  stage.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    el('office').classList.remove('dropping');
+    const id = e.dataTransfer.getData('text/plain');
+    const row = current.sessions.find((x) => x.sessionId === id);
+    if (!row) return;
+    toast('reopening ' + (row.title || 'that session') + '…');
+    const res = await window.board.openSessionWindow({
+      slot: liveSlots(), resumeId: row.sessionId, cwd: row.cwd,
+    });
+    toast(res.ok ? res.out : res.error);
+  });
+
+  async function endWorker(sessionId) {
+    const row = current.sessions.find((s) => s.sessionId === sessionId);
+    if (!row) return;
+    const res = await window.board.endSession({ pid: row.pid, title: row.title });
+    // That handler reports every outcome in `reason`, success or not, and
+    // carries no `error` at all. Reading the wrong field meant a refusal, a
+    // cancel, or a pid that no longer looks like a session all showed an empty
+    // toast, which reads as nothing having happened.
+    toast(res.reason || res.error || (res.killed ? 'ended ' + (row.title || '') : 'nothing to end'));
+  }
+
+  function showHire(on) {
+    el('ohirepop').hidden = !on;
+    el('onew').classList.toggle('on', on);
+    if (!on) return;
+    showMore(false);
+    el('ohirepop').style.top = el('onew').offsetTop + 'px';
+    el('hname').focus();
+  }
+  el('onew').onclick = (e) => { e.stopPropagation(); showHire(el('ohirepop').hidden); };
+  el('hcancel').onclick = () => showHire(false);
+  el('hgo').onclick = async () => {
+    const name = el('hname').value.trim();
+    if (!name) { el('hname').focus(); return; }
+    showHire(false);
+    toast('starting ' + name + '…');
+    const res = await window.board.openSessionWindow({
+      slot: liveSlots(),
+      name,
+      purpose: el('hwhy').value.trim(),
+      mode: el('hmode').value,
+    });
+    toast(res.ok ? res.out : res.error);
+    if (res.ok) { el('hname').value = ''; el('hwhy').value = ''; }
+  };
+
+  el('omore').onclick = (e) => { e.stopPropagation(); showMore(el('opop').hidden); };
+  // Anywhere else dismisses it, which is what a popover is expected to do and
+  // means it can never be left open over the plan.
+  document.addEventListener('click', (e) => {
+    if (!el('opop').hidden && !el('opop').contains(e.target)) showMore(false);
+    if (!el('ohirepop').hidden && !el('ohirepop').contains(e.target)) showHire(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    showMore(false);
+    showHire(false);
+  });
+
+  el('osize').oninput = (e) => window.Office.setBallSize(Number(e.target.value));
+  // The slider is whole numbers; the movement layer wants floorplan heights
+  // per second, so 16 on the slider means crossing the plan in about six seconds.
+  el('ospeed').oninput = (e) => window.Office.setSpeed(Number(e.target.value) / 100);
+  el('omeet').onclick = () => {
+    const on = !window.OfficeAgents.isGathering();
+    window.Office.setGathering(on);
+    el('omeet').classList.toggle('on', on);
+    el('omeet').innerHTML = on ? 'back to<br>desks' : 'meet at<br>table';
+  };
+
+  // Two stacked panes: the front one is filled while the board floats above
+  // everything, hollow once it sits in the window order like anything else.
+  function paintPin() {
+    const front = onTop
+      ? '<rect x="4.4" y="1.4" width="6.2" height="6.2" rx="1.6" fill="currentColor"/>'
+      : '<rect x="4.4" y="1.4" width="6.2" height="6.2" rx="1.6" fill="var(--bg)" stroke="currentColor" stroke-width="1.2"/>';
+    const b = el('pin');
+    b.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12">
+      <rect x="1.4" y="4.4" width="6.2" height="6.2" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      ${front}</svg>`;
+    b.title = onTop ? 'on top of other windows — click to let them cover it' : 'behind other windows — click to keep it on top';
+    b.classList.toggle('on', onTop);
+  }
+
+  // The top bar drags the window, so a control sitting on it has to keep its own
+  // pointer events to itself or every click would read as the start of a drag.
+  function control(node, fn) {
+    node.onpointerdown = (ev) => ev.stopPropagation();
+    node.onpointerup = (ev) => ev.stopPropagation();
+    node.onclick = (ev) => { ev.stopPropagation(); fn(); };
+  }
+
+  control(el('pin'), () => window.board.setOnTop(!onTop).then((v) => {
+    onTop = v;
+    paintPin();
+    toast(v ? 'staying on top' : 'other windows can cover it now');
+  }));
+  control(el('stow'), () => window.board.stow());
+  control(el('close'), () => window.board.quit());
+  paintPin();
 </script>

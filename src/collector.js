@@ -18,11 +18,32 @@ const CLAUDE_BIN = process.env.SB_CLAUDE_BIN || '/opt/homebrew/bin/claude';
 
 const ROOT = path.join(os.homedir(), '.claude', 'projects');
 const TAIL_BYTES = 256 * 1024;
+// A ceiling on how far back the tail read will grow chasing the peer window.
+// Reached only by a transcript with megabytes written inside two minutes, and
+// at that point the session is noisy enough that one missed link does not
+// matter more than the read does.
+const MAX_TAIL_BYTES = 8 * 1024 * 1024;
 const HEAD_BYTES = 96 * 1024;
 const RECENT_MS = 7 * 24 * 60 * 60 * 1000;
 const STALL_MS = 120 * 1000;
 const PARK_MS = 30 * 60 * 1000;
 const MAX_ROWS = 40;
+// Which waitingFor values mean a modal gate rather than an ordinary pause.
+// Matched loosely on purpose: the exact wording is the CLI's to change, and
+// mistaking a gate for a pause is the expensive direction of that error.
+const GATE_RE = /permission|trust|approve|confirm/i;
+// How long after a message two sessions still count as working together. Peer
+// traffic is bursty: a pair trade several messages in a few seconds and then go
+// quiet while they each do the work, and treating that quiet as "finished"
+// would end the collaboration mid-task.
+//
+// Six minutes rather than the two this started as, because two was a guess and
+// the real traffic on this machine disagreed with it: across 109 gaps between
+// consecutive peer messages, the median gap was about 176 seconds and a third
+// ran past 2 minutes, some to half an hour. Two minutes was cutting off the
+// median conversation. Six covers most of them without pretending a pair who
+// stopped talking half an hour ago are still working together.
+const PEER_WINDOW_MS = 6 * 60 * 1000;
 
 // The head of a transcript is immutable, so its launch cwd is cached for good.
 const headCache = new Map();
@@ -53,6 +74,10 @@ async function liveAgents() {
       kind: a.kind || null,
       peerName: a.name || null,
       status: a.status || a.state || null,
+      // Why a session cannot proceed, when the registry knows: "permission
+      // prompt", "input needed" and so on. A status of 'waiting' without this
+      // would only say that it has stopped, not that a human is the reason.
+      waitingFor: a.waitingFor || null,
     }));
   } catch {
     return null;
@@ -144,6 +169,61 @@ function parseLines(chunk) {
   return out;
 }
 
+// Two sessions talking leaves a record on both sides, and they are not the same
+// shape. The sender writes a SendMessage tool_use naming the peer by handle; the
+// receiver gets a plain user turn wrapping the text in a cross-session-message
+// tag whose `from` is the sender's unix socket, and that socket is named after
+// the sender's pid. The pid is the better key of the two, because a pid matches
+// the process table directly while a handle has to be looked up in a registry
+// that does not always list every session.
+const CROSS_RE = /<cross-session-message\s+from="uds:[^"]*?\/(\d+)\.sock"\s+from-name="([^"]*)"/;
+
+function peerEventFrom(entry) {
+  const at = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
+  if (!at) return null;
+  const content = (entry.message || {}).content;
+
+  if (entry.type === 'assistant' && Array.isArray(content)) {
+    for (const b of content) {
+      if (b && b.type === 'tool_use' && b.name === 'SendMessage' && b.input && b.input.to) {
+        return { dir: 'out', at, to: String(b.input.to), summary: b.input.summary || null };
+      }
+    }
+    return null;
+  }
+
+  if (entry.type === 'user' && typeof content === 'string') {
+    const m = CROSS_RE.exec(content);
+    if (m) return { dir: 'in', at, fromPid: Number(m[1]), fromName: m[2] || null };
+  }
+  return null;
+}
+
+// What a session is asking permission for. A tool_use is written the moment
+// the agent decides to call the tool, before anyone approves it, and the
+// matching tool_result only appears once it has run. So the newest tool_use
+// with no result behind it is the thing on screen waiting for an answer.
+//
+// Only the shape is read, never anything that would be surprising to find in a
+// panel: the tool's name and the one short field it uses to describe itself.
+function pendingToolOf(entries) {
+  const resolved = new Set();
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const content = (entries[i].message || {}).content;
+    if (!Array.isArray(content)) continue;
+    for (const b of content) {
+      if (!b || !b.type) continue;
+      if (b.type === 'tool_result' && b.tool_use_id) resolved.add(b.tool_use_id);
+      if (b.type === 'tool_use' && b.id && !resolved.has(b.id)) {
+        const inp = b.input || {};
+        const what = inp.description || inp.command || inp.file_path || inp.path || inp.pattern || '';
+        return { name: b.name || 'a tool', what: String(what).replace(/\s+/g, ' ').trim().slice(0, 120) };
+      }
+    }
+  }
+  return null;
+}
+
 function lastBlockKind(entry) {
   const content = (entry.message || {}).content;
   if (typeof content === 'string') return 'str';
@@ -152,16 +232,52 @@ function lastBlockKind(entry) {
   return last && last.type ? last.type : null;
 }
 
+// A fixed-size tail is enough for the title, the cwd and the turn state, all of
+// which are at the very end of the file. It is not enough for peer messages: a
+// single oversized entry written after one, a large tool_result say, can push a
+// five-second-old message clean out of a 256KB slice, and the slice is taken in
+// raw bytes before anything is parsed, so no amount of filtering downstream can
+// get it back. The read grows until it has actually covered the window.
+function readTailCovering(file, cutoff) {
+  let bytes = TAIL_BYTES;
+  for (;;) {
+    const chunk = readChunk(file, bytes, true);
+    const entries = parseLines(chunk);
+    // The whole file is in hand, so there is nothing further back to find.
+    if (!chunk.partialFirstLine) return entries;
+    if (bytes >= MAX_TAIL_BYTES) return entries;
+    // The oldest entry read is still inside the window, so an older one that
+    // also counts may be sitting just behind the cut.
+    const oldest = entries.find((e) => e.timestamp && Date.parse(e.timestamp));
+    if (oldest && Date.parse(oldest.timestamp) < cutoff) return entries;
+    bytes *= 2;
+  }
+}
+
 // Walk a transcript's tail backwards for the newest title, cwd and turn state.
 function describe(file) {
   const st = fs.statSync(file);
-  const entries = parseLines(readChunk(file, TAIL_BYTES, true));
+  const entries = readTailCovering(file, Date.now() - PEER_WINDOW_MS);
   let title = null;
   let cwd = null;
   let turn = null;
+  const peerEvents = [];
+  const cutoff = Date.now() - PEER_WINDOW_MS;
+  let pastWindow = false;
+
 
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
+    if (!pastWindow) {
+      const ev = peerEventFrom(e);
+      if (ev && ev.at >= cutoff) peerEvents.push(ev);
+      // Entries are in order, so the first one older than the window means
+      // every entry behind it is older too and none of them can still count.
+      if (e.timestamp) {
+        const t = Date.parse(e.timestamp);
+        if (t && t < cutoff) pastWindow = true;
+      }
+    }
     if (!title && e.type === 'ai-title' && e.aiTitle) title = e.aiTitle;
     if (!cwd && e.cwd) cwd = e.cwd;
     if (!turn && (e.type === 'user' || e.type === 'assistant')) {
@@ -174,7 +290,9 @@ function describe(file) {
         done: e.type === 'assistant' && kind === 'text',
       };
     }
-    if (title && cwd && turn) break;
+    // The peer walk has its own stopping point, so the usual one is not
+    // enough on its own any more.
+    if (title && cwd && turn && pastWindow) break;
   }
 
   // The cwd on a transcript line follows the shell as it moves, so the only
@@ -207,6 +325,8 @@ function describe(file) {
     mtime: st.mtimeMs,
     sizeBytes: st.size,
     turn,
+    pendingTool: pendingToolOf(entries),
+    peerEvents,
   };
 }
 
@@ -241,7 +361,12 @@ function allTranscripts() {
   return rows.sort((a, b) => b.mtime - a.mtime);
 }
 
-async function snapshot() {
+// ignorePids lets the app leave out the `claude` processes it started itself.
+// Nothing in a fork's own record distinguishes it from a session a person
+// opened: the registry calls it interactive like any other, so the caller that
+// spawned it is the only one who can say.
+async function snapshot(opts = {}) {
+  const ignorePids = opts.ignorePids || new Set();
   // Both sources always run. The registry is exact about what it reports, but
   // it is not guaranteed to be an exhaustive census, and trusting it alone would
   // silently mark a live session 'closed'. The process scan is the backstop.
@@ -291,6 +416,7 @@ async function snapshot() {
       row.peerName = a.peerName;
       row.shortId = a.shortId;
       row.reported = a.status;
+      row.waitingFor = a.waitingFor;
     }
   }
 
@@ -311,7 +437,13 @@ async function snapshot() {
       match.viaProcessScan = true;
     }
   }
-  const strandedPids = leftover.filter((p) => !described.some((s) => s.pid === p.pid));
+  const strandedPids = leftover.filter((p) => !described.some((s) => s.pid === p.pid)
+    && !ignorePids.has(p.pid));
+  // Dropped after matching rather than before, so a fork cannot be mistaken for
+  // the session it was forked from and quietly claim its row.
+  for (let i = described.length - 1; i >= 0; i--) {
+    if (described[i].pid && ignorePids.has(described[i].pid)) described.splice(i, 1);
+  }
 
   const ttyMap = await ttysFor(described.filter((s) => s.pid).map((s) => s.pid));
   for (const s of described) if (s.pid) s.tty = ttyMap[s.pid] || null;
@@ -325,6 +457,21 @@ async function snapshot() {
     // prompt; from the transcript alone that is indistinguishable from a slow
     // tool call, so this check comes first.
     else if (s.reported === 'blocked') s.state = 'blocked';
+    // 'waiting' from the registry means the session has stopped and a person is
+    // the reason, and waitingFor says which kind. A permission or trust prompt
+    // is a gate: nothing happens until someone answers the menu on screen, and
+    // hiding that window would strand the session for good. Anything else is an
+    // ordinary pause for the next instruction, which is every peer's resting
+    // state and must not paint as an emergency.
+    //
+    // Until this branch existed, 'waiting' matched none of them: it fell past
+    // every test to 'working', then to 'stalled' two minutes later. A session
+    // sitting on a permission prompt looked busy, the "waiting on you" count
+    // never saw it, and the office would have hidden its window quite happily.
+    else if (s.reported === 'waiting') {
+      s.state = GATE_RE.test(s.waitingFor || '') ? 'blocked'
+        : (age > PARK_MS ? 'parked' : 'waiting');
+    }
     // The registry's own view of a finished turn beats inferring it from the
     // transcript, and it is right even before anything is written to disk.
     else if (s.reported === 'idle') s.state = age > PARK_MS ? 'parked' : 'waiting';
@@ -335,11 +482,46 @@ async function snapshot() {
     s.idleSec = Math.round(age / 1000);
   }
 
+  // Resolve each side's half of a conversation into one list of who is talking
+  // to whom. Both sides record the same message, so the pair key collapses them
+  // into a single link rather than two.
+  const byPeerName = new Map();
+  const byPid = new Map();
+  for (const x of described) {
+    if (x.peerName) byPeerName.set(x.peerName, x.sessionId);
+    if (x.pid) byPid.set(x.pid, x.sessionId);
+  }
+  const linkMap = new Map();
+  for (const x of described) {
+    for (const ev of x.peerEvents || []) {
+      if (now - ev.at > PEER_WINDOW_MS) continue;
+      // Direction is kept, not just the pair, so a view can tell which side
+      // opened the conversation from the side that was contacted. This file is
+      // shared by every view and should not know what any of them draw.
+      const a = ev.dir === 'out' ? x.sessionId : (byPid.get(ev.fromPid) || byPeerName.get(ev.fromName));
+      const b = ev.dir === 'out' ? byPeerName.get(ev.to) : x.sessionId;
+      // A session whose partner is not on the board (closed, or never matched
+      // to a pid) has nobody to walk to, so the link is dropped rather than
+      // left dangling.
+      if (!a || !b || a === b) continue;
+      const key = a + '>' + b;
+      const prev = linkMap.get(key);
+      if (!prev || ev.at > prev.at) {
+        linkMap.set(key, { a, b, at: ev.at, summary: ev.summary || (prev && prev.summary) || null });
+      }
+    }
+  }
+  const links = [...linkMap.values()].sort((p, q) => q.at - p.at);
+  // The per-session event lists have done their job and are bulky; the links
+  // are what the views actually want.
+  for (const x of described) delete x.peerEvents;
+
   const rank = { blocked: 0, waiting: 1, working: 2, stalled: 3, parked: 4, closed: 5 };
   described.sort((a, b) => (rank[a.state] - rank[b.state]) || (b.mtime - a.mtime));
 
   return {
     at: now,
+    links,
     liveCount: described.filter((s) => s.pid).length,
     waitingCount: described.filter((s) => s.state === 'waiting' || s.state === 'blocked').length,
     // A live session the registry omitted is the failure this guards against:

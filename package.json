@@ -1,14 +1,50 @@
 {
   "name": "session-board",
-  "version": "0.1.0",
-  "description": "Always-on-top strip showing live Claude Code sessions and whether each one is working or waiting on you",
+  "version": "0.9.0",
+  "description": "Always-on-top strip showing live Claude Code sessions and whether each one is working or waiting on you, with an office view of sessions as balls on a hand-drawn floorplan",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "collect": "node src/collector.js"
+    "collect": "node src/collector.js",
+    "icon": "node build/make-icon.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "install-app": "bash tools/install-app.sh"
   },
   "license": "MIT",
   "devDependencies": {
-    "electron": "^43.2.0"
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "playwright": "^1.64.0"
+  },
+  "build": {
+    "appId": "com.williamparker.sessionboard",
+    "productName": "Session Board",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "darkModeSupport": true,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "extendInfo": {
+        "NSHumanReadableCopyright": "Session Board reads this machine’s own Claude Code sessions. It has no network code."
+      }
+    },
+    "dmg": {
+      "title": "Session Board"
+    }
   }
 }

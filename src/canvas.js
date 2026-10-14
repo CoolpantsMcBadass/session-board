@@ -9,6 +9,12 @@
   const NODE_W = 172;
   const NODE_H = 60;
   const PAD = 16;
+  const TRASH_W = 46;
+  const TRASH_H = 46;
+  const TRASH_PAD = 12;
+  const TRASH_GRAB = 14;   // a drop zone wider than the icon: aiming at a 46px
+                           // square with a 172px box under the hand is fiddly
+  const DISMISS_MS = 8000;
 
   let board = { positions: {}, links: [], pinned: [] };
   let sessions = [];
@@ -16,6 +22,12 @@
   let helpers = {};
 
   let dragging = null;   // { id, dx, dy, from, travelled }
+  let overBin = false;   // the dragged node is hovering the trash
+  // Ids the trash has just taken. A killed session can still be in the next
+  // snapshot or two before its pid clears, and without this the node springs
+  // back for a poll after being thrown away. An entry expires on its own, so a
+  // session that survived the signal reappears rather than vanishing for good.
+  const dismissed = new Map();
   let lastTap = { id: null, at: 0 };
   let linking = null;    // { fromId, x, y }
   let selected = null;   // link id
@@ -41,11 +53,83 @@
   // Nodes on the map: everything live, plus anything you have already placed or
   // linked, so a session you were talking to does not vanish when it exits.
   function nodeSet() {
+    const now = Date.now();
+    for (const [id, until] of dismissed) if (now > until) dismissed.delete(id);
     const byId = new Map(sessions.map((s) => [s.sessionId, s]));
     const ids = new Set(sessions.filter((s) => s.pid).map((s) => s.sessionId));
     for (const id of Object.keys(board.positions)) if (byId.has(id)) ids.add(id);
     for (const l of board.links) { if (byId.has(l.from)) ids.add(l.from); if (byId.has(l.to)) ids.add(l.to); }
+    for (const id of dismissed.keys()) ids.delete(id);
     return [...ids].map((id) => byId.get(id)).filter(Boolean);
+  }
+
+  // The trash lives in the map's own coordinates, with a margin around it so a
+  // 172px node dropped roughly there still lands.
+  function binRect(w, h) {
+    return {
+      x: TRASH_PAD - TRASH_GRAB,
+      y: h - TRASH_PAD - TRASH_H - TRASH_GRAB,
+      w: TRASH_W + TRASH_GRAB * 2,
+      h: TRASH_H + TRASH_GRAB * 2,
+    };
+  }
+
+  function overBinAt(m) {
+    const host = document.getElementById('map');
+    if (!host) return false;
+    const r = binRect(host.clientWidth, host.clientHeight);
+    return m.x >= r.x && m.x <= r.x + r.w && m.y >= r.y && m.y <= r.y + r.h;
+  }
+
+  function paintBin() {
+    const bin = document.getElementById('trash');
+    if (!bin) return;
+    bin.classList.toggle('armed', !!dragging);
+    bin.classList.toggle('hot', !!overBin);
+  }
+
+  // Taking a node off the map is only ever about the board: positions and links
+  // are ours to delete, the transcript on disk is not touched, and the session
+  // stays resumable by id.
+  function forget(id) {
+    delete board.positions[id];
+    for (const link of board.links) {
+      if (link.from === id || link.to === id) delete answers[linkId(link.from, link.to)];
+    }
+    board.links = board.links.filter((link) => link.from !== id && link.to !== id);
+    if (selected && selected.split('>').includes(id)) selected = null;
+    save();
+  }
+
+  // A node dropped on the trash. A session that has already exited is just
+  // cleared off the board; a live one is a real process, so main.js re-checks
+  // the pid and asks before anything is signalled, and the node stays put if
+  // the answer is no.
+  function discard(id, home) {
+    const toast = helpers.toast || (() => {});
+    const s = sessions.find((x) => x.sessionId === id);
+    // The drop left the node sitting on the bin. If it is not going anywhere,
+    // put it back where the drag started rather than leaving it parked there.
+    const putBack = () => {
+      if (home) board.positions[id] = { x: home.x, y: home.y };
+      save();
+      render();
+    };
+    if (!s || !s.pid) {
+      forget(id);
+      render();
+      toast(s ? 'took ' + s.title + ' off the board' : 'took it off the board');
+      return;
+    }
+    api.endSession({ pid: s.pid, title: s.title }).then((res) => {
+      if (!res.ok) { toast(res.reason || 'could not end that one'); putBack(); return; }
+      if (!res.killed && res.reason === 'cancelled') { putBack(); return; }
+      forget(id);
+      dismissed.set(id, Date.now() + DISMISS_MS);
+      render();
+      if (res.killed) toast(res.slow ? s.title + ' is shutting down' : 'ended ' + s.title);
+      else toast('took ' + s.title + ' off the board');
+    });
   }
 
   function place(nodes, w, h) {
@@ -164,8 +248,16 @@
         </defs>
         ${wireHtml()}
       </svg>
-      ${nodeHtml}`;
+      ${nodeHtml}
+      <div id="trash" title="drag a session here to end it">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.5 5.5h13M8 5.5V3.8h4v1.7M5.2 5.5l.8 10.2a1.2 1.2 0 0 0 1.2 1.1h5.6a1.2 1.2 0 0 0 1.2-1.1l.8-10.2"/>
+          <path d="M8.4 8.6v5M11.6 8.6v5"/>
+        </svg>
+        <span class="trash-cap">drop to end</span>
+      </div>`;
     wire(host);
+    paintBin();
     renderComposer();
   }
 
@@ -241,7 +333,9 @@
         if (ev.target.classList.contains('port')) return;
         const p = board.positions[node.dataset.id];
         const m = local(ev);
-        dragging = { id: node.dataset.id, dx: m.x - p.x, dy: m.y - p.y, travelled: 0, last: m };
+        dragging = { id: node.dataset.id, dx: m.x - p.x, dy: m.y - p.y, travelled: 0, last: m, from: { x: p.x, y: p.y } };
+        overBin = false;
+        paintBin();
         try { node.setPointerCapture(ev.pointerId); } catch { /* synthetic pointer */ }
         ev.preventDefault();
       };
@@ -260,13 +354,23 @@
         p.y = Math.max(0, Math.min(maxY, Math.round(m.y - dragging.dy)));
         node.style.left = p.x + 'px';
         node.style.top = p.y + 'px';
+        // Tracked on the pointer rather than the node's box, so the hand says
+        // where the drop goes and a wide node overlapping the bin does not.
+        const hot = overBinAt(m);
+        if (hot !== overBin) { overBin = hot; paintBin(); }
+        node.classList.toggle('doomed', overBin);
         drawWiresOnly();
       };
       node.onpointerup = () => {
         if (!dragging) return;
         const id = dragging.id;
         const moved = dragging.travelled >= 4;
+        const binned = overBin;
+        const home = dragging.from;
         dragging = null;
+        overBin = false;
+        paintBin();
+        if (binned) { lastTap = { id: null, at: 0 }; discard(id, home); return; }
         if (moved) { lastTap = { id: null, at: 0 }; save(); render(); return; }
 
         // A tap that went nowhere: a second one in quick succession opens the
@@ -341,6 +445,12 @@
     },
     update(list) {
       sessions = list || [];
+      // A binned session is held off the map until its pid actually clears.
+      // Once a snapshot agrees it is gone, the hold can be dropped early.
+      if (dismissed.size) {
+        const live = new Set(sessions.filter((x) => x.pid).map((x) => x.sessionId));
+        for (const id of dismissed.keys()) if (!live.has(id)) dismissed.delete(id);
+      }
       if (dragging || linking) return;   // never redraw mid-gesture
       render();
     },
@@ -362,6 +472,32 @@
         node.dispatchEvent(ev('pointerup'));
       }
       return true;
+    },
+
+    // Drag a node onto the trash through the real pointer handlers. main.js
+    // refuses to signal anything while SB_TEST_TRASH is set, so this exercises
+    // the whole gesture without ending a session.
+    simulateTrash(match) {
+      const host = document.getElementById('map');
+      const nodes = [...host.querySelectorAll('.node')];
+      const node = nodes.find((n) => (n.textContent || '').toLowerCase().includes(String(match).toLowerCase()));
+      const bin = document.getElementById('trash');
+      if (!node || !bin) return false;
+      const nr = node.getBoundingClientRect();
+      const br = bin.getBoundingClientRect();
+      const cx = br.left + br.width / 2;
+      const cy = br.top + br.height / 2;
+      const ev = (type, x, y) => new PointerEvent(type, { bubbles: true, pointerId: 1, clientX: x, clientY: y });
+      node.dispatchEvent(ev('pointerdown', nr.left + 30, nr.top + 20));
+      const grabbed = !!dragging;
+      // Two moves: the first clears the 4px dead zone, the second lands on the
+      // bin, which is how a hand gets there too.
+      node.dispatchEvent(ev('pointermove', (nr.left + 30 + cx) / 2, (nr.top + 20 + cy) / 2));
+      node.dispatchEvent(ev('pointermove', cx, cy));
+      const hot = bin.classList.contains('hot');
+      node.dispatchEvent(ev('pointerup', cx, cy));
+      const host2 = document.getElementById('map');
+      return { grabbed, hot, bin: Math.round(cx) + ',' + Math.round(cy), map: host2.clientWidth + 'x' + host2.clientHeight };
     },
 
     // Right-click the first wire, through the same handler a mouse would hit.
