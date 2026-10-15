@@ -6,7 +6,7 @@ function fsExists(p) {
   try { return fs.statSync(p).isDirectory(); } catch { return false; }
 }
 const { execFile } = require('child_process');
-const { snapshot, digest } = require('./collector');
+const { snapshot, digest, handoffBrief } = require('./collector');
 const demoFeed = require('./demo-feed');
 
 // A dev run is `electron .`, named after the package; the installed app is
@@ -997,7 +997,7 @@ function gridSlot(index, cw, ch) {
 const HIRE_MODES = new Set(['manual', 'acceptEdits', 'plan']);
 const MODEL_ALIASES = new Set(['opus', 'sonnet', 'haiku']);
 
-ipcMain.handle('open-session-window', async (_e, { cwd, resumeId, model, slot, name, purpose, mode }) => {
+async function openSessionWindow({ cwd, resumeId, model, slot, name, purpose, mode, prompt }) {
   if (resumeId && !UUID_RE.test(resumeId)) return { ok: false, error: 'bad session id' };
   if (model && !MODEL_ALIASES.has(model)) return { ok: false, error: 'bad model' };
   const dir = cwd && fsExists(cwd) ? cwd : app.getPath('home');
@@ -1018,6 +1018,11 @@ ipcMain.handle('open-session-window', async (_e, { cwd, resumeId, model, slot, n
   const why = String(purpose || '').replace(/\s+/g, ' ').trim().slice(0, 2000);
   if (why) flags.push(`--append-system-prompt ${shQuote(why)}`);
   if (mode && HIRE_MODES.has(mode)) flags.push(`--permission-mode ${mode}`);
+  // A first message, typed for you: what makes a handoff start working rather
+  // than sit at an empty prompt. Flattened for the same AppleScript reason as
+  // the purpose above.
+  const first = String(prompt || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+  if (first) flags.push(shQuote(first));
   const cmd = `cd ${shQuote(dir)} && claude${flags.length ? ' ' + flags.join(' ') : ''}`;
 
   const made = await osa(`tell application "Terminal"
@@ -1051,6 +1056,77 @@ end tell`);
   if (!placed.ok) return placed;
   const who = (clean ? `${clean} started` : 'opened') + (model ? ` on ${model}` : '');
   return { ok: true, out: `${who} in ${dir.replace(app.getPath('home'), '~')}` };
+}
+
+ipcMain.handle('open-session-window', (_e, spec) => openSessionWindow(spec || {}));
+
+// A session's context is resent in full on every turn, so one that has grown
+// to 400K tokens pays for 400K tokens each time it answers anything, however
+// small. Compacting is one way out, but it can only be typed in that session's
+// own window. The other is a handoff: write down what a successor needs, start
+// a fresh session in the same directory pointed at that note, and let the old
+// one be ended once the new one has its footing. Nothing here ends the old
+// session; that stays a separate, deliberate act.
+const HANDOFF_DIR = () => path.join(app.getPath('userData'), 'handoffs');
+
+function handoffMarkdown(title, b) {
+  const list = (xs) => xs.length ? xs.map((p) => `- ${p}`).join('\n') : '- (none recorded)';
+  return [
+    `# Handoff: ${title}`,
+    '',
+    `Written ${new Date().toISOString()} by Session Board, because the session below had`,
+    'grown expensive to continue. You are its successor, starting with a clean context.',
+    '',
+    `Working directory: ${b.cwd || '(unknown)'}`,
+    '',
+    '## What the work was for (the session\'s opening request)',
+    '',
+    b.opening || '(not found)',
+    '',
+    '## Files it edited most recently, newest first',
+    '',
+    list(b.edited),
+    '',
+    'Only edits made with the Edit/Write tools are listed. Changes made through shell',
+    'commands are not, so check `git status` / `git diff` where there is a repo.',
+    '',
+    '## Files it was reading',
+    '',
+    list(b.read),
+    '',
+    '## The recent conversation',
+    '',
+    b.recent || '(nothing readable)',
+    '',
+  ].join('\n');
+}
+
+ipcMain.handle('handoff', async (_e, { sessionId, title, model, slot }) => {
+  if (!UUID_RE.test(sessionId || '')) return { ok: false, error: 'bad session id' };
+  const brief = handoffBrief(sessionId);
+  if (!brief) return { ok: false, error: 'no transcript for that session' };
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  const file = path.join(HANDOFF_DIR(), `${stamp}-${sessionId.slice(0, 8)}.md`);
+  try {
+    fs.mkdirSync(HANDOFF_DIR(), { recursive: true });
+    fs.writeFileSync(file, handoffMarkdown(title || sessionId, brief));
+  } catch (err) {
+    return { ok: false, error: 'could not write the handoff note: ' + err.message };
+  }
+  const res = await openSessionWindow({
+    cwd: brief.cwd,
+    // No --add-dir for the note's folder, though it sits outside the project:
+    // tried 2026-10-15, and adding a directory makes the new session open on a
+    // "do you trust this folder" screen whose default answer is to exit. A
+    // plain Read outside the working directory went through without a prompt.
+    model: MODEL_ALIASES.has(model) ? model : undefined,
+    slot,
+    name: `${String(title || 'session').slice(0, 30)} cont`,
+    prompt: `Read ${file} first. It is a handoff from an earlier session doing this work, whose context had grown too large. Get your bearings from it and the files it names, tell me in a few lines where things stand, then wait for me before changing anything.`,
+  });
+  if (res.ok) res.out = `${res.out}. The old session is still running; end it when you're ready.`;
+  res.file = file;
+  return res;
 });
 
 // Ending a session from the map. Two things make this safe enough to do by

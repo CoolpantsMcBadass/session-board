@@ -404,3 +404,37 @@ v0.12.0 (2026-10-15): hiring picks a model, Sonnet by default
 - tested with the main-process handler stubbed via playwright's app.evaluate,
   so no Terminal window opened: three hires (default, opus, default) sent
   sonnet, opus, sonnet, and the form read sonnet on each open
+
+v0.13.0 (2026-10-15): warn when a session's context gets expensive, and hand it off
+- every current model has a 1M window, so "how full" was the wrong question:
+  each turn resends the whole context, and a 400K session pays for 400K every
+  time it answers anything. Measured across this machine's transcripts: fresh
+  sessions sit at 50-60K, while the multi-session builds' testers and leads ran
+  300-530K, which is where the spend actually went
+- CTX_HEAVY 200K (amber) and CTX_HUGE 400K (red), set as cost lines, not
+  fullness lines. Shown as the colour of the list row's token line, a ring
+  round the office ball, a dot on the office's other-session boxes, and the
+  colour of the lead's name over the chat
+- "hand off" appears beside any session past 200K (list row, office box on
+  hover, chat header for the lead). It writes a note to
+  <userData>/handoffs/<time>-<id>.md and opens a new Terminal session in the
+  same directory, on the same model tier, named "<title> cont", with a first
+  message telling it to read the note, report where things stand, and wait.
+  The old session is left running; ending it stays a separate, deliberate act
+- the note (collector.js handoffBrief()) has the session's opening request,
+  the files it edited and read most recently (from Edit/Write/Read tool_use
+  inputs in the last 4MB), and a 16K-char digest of the recent conversation.
+  The opening request needed a 1MB head read: in a real session it sat behind
+  ~300KB of attached context, past the 96KB the poll reads. Shell-made edits
+  aren't visible to it, so the note tells the successor to check git status
+- collector.js now also records each session's model (from the newest
+  assistant turn), which is how the successor's tier is chosen
+- open-session-window's body became openSessionWindow(), shared with handoff,
+  and takes a first message (the positional prompt to `claude`)
+- tried and rejected: --add-dir for the notes folder. It made the new session
+  open on a "do you trust this folder" screen whose default is to exit. A
+  plain Read outside the working directory goes through without it
+- tested for real three times with a Haiku successor (one with a space in the
+  notes path, as "Application Support" has): each read the note, ran git
+  status on its own, and gave an accurate summary of where the work stood.
+  Warning visuals checked with the thresholds lowered in a test copy

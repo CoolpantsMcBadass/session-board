@@ -159,7 +159,8 @@
         layer.appendChild(el);
         els.set(b.sessionId, el);
       }
-      el.className = 'ball is-' + (b.state || 'parked');
+      const ctx = typeof ctxLevel === 'function' ? ctxLevel(b) : '';
+      el.className = 'ball is-' + (b.state || 'parked') + (ctx ? ' ' + ctx : '');
       el.style.width = px + 'px';
       el.style.height = px + 'px';
       // A ball under the hand is positioned by the hand. Everything else keeps

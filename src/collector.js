@@ -324,6 +324,7 @@ function describe(file) {
   // context window's current fill. Walking backward for title/cwd/turn
   // already passes this same entry, so it costs nothing extra to also keep.
   let usage = null;
+  let model = null;
   const peerEvents = [];
   const cutoff = Date.now() - PEER_WINDOW_MS;
   let pastWindow = false;
@@ -355,7 +356,7 @@ function describe(file) {
     }
     if (!usage && e.type === 'assistant') {
       const u = (e.message || {}).usage;
-      if (u) usage = u;
+      if (u) { usage = u; model = (e.message || {}).model || null; }
     }
     // The peer walk has its own stopping point, so the usual one is not
     // enough on its own any more.
@@ -398,6 +399,9 @@ function describe(file) {
     pendingTool: pendingToolOf(entries),
     peerEvents,
     contextTokens,
+    // The model of the newest turn, e.g. claude-opus-5-5. A handoff starts its
+    // successor on the same tier unless told otherwise.
+    model,
   };
 }
 
@@ -623,13 +627,15 @@ async function snapshot(opts = {}) {
 // A short brief of what a session has been doing, for handing to another one.
 // Tool traffic is dropped: only the human's asks and the assistant's prose carry
 // enough meaning to be worth another session's context window.
-function digest(sessionId, maxChars = 6000, maxTurns = 14) {
-  const row = allTranscripts()
-    .map((r) => r.file)
-    .find((f) => path.basename(f, '.jsonl') === sessionId);
-  if (!row) return null;
-
-  const entries = parseLines(readChunk(row, TAIL_BYTES, true));
+function digest(sessionId, maxChars = 6000, maxTurns = 14, preread = null) {
+  let entries = preread;
+  if (!entries) {
+    const row = allTranscripts()
+      .map((r) => r.file)
+      .find((f) => path.basename(f, '.jsonl') === sessionId);
+    if (!row) return null;
+    entries = parseLines(readChunk(row, TAIL_BYTES, true));
+  }
   const turns = [];
   for (const e of entries) {
     if (e.type !== 'user' && e.type !== 'assistant') continue;
@@ -658,7 +664,63 @@ function digest(sessionId, maxChars = 6000, maxTurns = 14) {
   return out.join('\n\n') || null;
 }
 
-module.exports = { snapshot, digest };
+// What a fresh session needs to carry on from one whose context has grown
+// expensive. Unlike digest(), which is read on every ask and must stay small,
+// this runs once per handoff, so it reads further back: a tool-heavy session's
+// last 256KB can hold only a few hundred characters of prose, which is not
+// enough to continue anyone's work from.
+//
+// Three parts, cheapest to most useful: the session's opening request (what the
+// work is for), the files it wrote or edited most recently (where the work is),
+// and the recent conversation (where it stands). The successor reads the files
+// themselves; the brief only has to point at them.
+const HANDOFF_TAIL_BYTES = 4 * 1024 * 1024;
+
+function handoffBrief(sessionId) {
+  const file = allTranscripts()
+    .map((r) => r.file)
+    .find((f) => path.basename(f, '.jsonl') === sessionId);
+  if (!file) return null;
+
+  let opening = null;
+  let cwd = null;
+  // The opening request can sit behind several hundred KB of attached context
+  // at the head of a file, well past the 96KB the poll reads; one handoff can
+  // afford the larger read.
+  for (const e of parseLines(readChunk(file, 1024 * 1024, false))) {
+    if (!cwd && e.cwd) cwd = e.cwd;
+    if (opening || e.type !== 'user' || e.isSidechain) continue;
+    const c = (e.message || {}).content;
+    const text = typeof c === 'string' ? c
+      : Array.isArray(c) ? c.filter((b) => b && b.type === 'text').map((b) => b.text).join('\n') : '';
+    if (text && !/^<(command-name|local-command|system-reminder|local-command-caveat)/.test(text.trim())) {
+      opening = text.trim().slice(0, 2000);
+    }
+  }
+
+  const entries = parseLines(readChunk(file, HANDOFF_TAIL_BYTES, true));
+  const touched = new Map(); // path -> 'edited' | 'read', newest last
+  for (const e of entries) {
+    if (e.type !== 'assistant' || e.isSidechain) continue;
+    for (const b of ((e.message || {}).content || [])) {
+      if (!b || b.type !== 'tool_use' || !b.input) continue;
+      const p = b.input.file_path || b.input.notebook_path;
+      if (!p) continue;
+      const wrote = /^(Edit|Write|MultiEdit|NotebookEdit)$/.test(b.name);
+      const was = touched.get(p);
+      touched.delete(p);
+      touched.set(p, wrote || was === 'edited' ? 'edited' : 'read');
+    }
+  }
+  const files = [...touched].reverse();
+  const edited = files.filter(([, k]) => k === 'edited').slice(0, 15).map(([p]) => p);
+  const read = files.filter(([, k]) => k === 'read').slice(0, 10).map(([p]) => p);
+
+  const recent = digest(sessionId, 16000, 40, entries);
+  return { cwd, opening, edited, read, recent };
+}
+
+module.exports = { snapshot, digest, handoffBrief };
 
 if (require.main === module) {
   snapshot().then((s) => {

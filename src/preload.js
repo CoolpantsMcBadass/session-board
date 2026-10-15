@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('board', {
   showSessions: () => ipcRenderer.invoke('show-sessions'),
   sessionsAway: () => ipcRenderer.invoke('sessions-away'),
   openSessionWindow: (spec) => ipcRenderer.invoke('open-session-window', spec),
+  handoff: (spec) => ipcRenderer.invoke('handoff', spec),
   stow: () => ipcRenderer.invoke('stow'),
   setOnTop: (next) => ipcRenderer.invoke('set-on-top', next),
   quit: () => ipcRenderer.invoke('quit'),

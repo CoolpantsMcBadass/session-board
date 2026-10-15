@@ -102,6 +102,16 @@
   .row:hover { background: var(--bg-row-hover); }
   .row .dot { margin-top: 4px; }
   .row .title { font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Context past the point where every turn gets expensive. Amber is a
+     heads-up, red is "hand this off": see CTX_HEAVY / CTX_HUGE. */
+  .meta.ctx-heavy { color: var(--waiting); }
+  .meta.ctx-huge { color: var(--blocked); }
+  #office .other.ctx-heavy .what::after { content: ' ●'; color: var(--waiting); }
+  #office .other.ctx-huge .what::after { content: ' ●'; color: var(--blocked); }
+  #office .chat-head .lead.ctx-heavy { color: var(--waiting); }
+  #office .chat-head .lead.ctx-huge { color: var(--blocked); }
+  .ball.ctx-heavy { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--waiting); }
+  .ball.ctx-huge { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--blocked); }
   .row .meta { font-size: 10.5px; color: var(--ink-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row.is-waiting .title { color: var(--waiting); }
   .row.is-blocked .title { color: var(--blocked); }
@@ -436,6 +446,7 @@
       <div class="others gone" id="recent"></div>
         <div class="chat-head">
           <span class="lead" id="chatwho">no lead</span>
+          <button id="chathandoff" hidden title="context is large: start a fresh session from a summary of this one">hand off</button>
           <button id="chatmodel" title="which model answers here; click to change">sonnet</button>
           <button id="chatnew" title="start again from the lead's latest state">fresh</button>
         </div>
@@ -559,6 +570,33 @@
   // Context is this turn's prompt; total is every turn's prompt and reply
   // summed over the session's life, cache reuse counted every time it's
   // resent, which is also how Claude Code's own cost accounting counts it.
+  // Every turn resends the whole context, so its size is what a turn costs,
+  // whatever the window allows (1M on every current model). A fresh session
+  // starts around 50-60K; measured 2026-10-15, the multi-session builds were
+  // running at 300-530K, which is where the spend went. These are cost lines,
+  // not fullness lines.
+  const CTX_HEAVY = 200000;
+  const CTX_HUGE = 400000;
+  function ctxLevel(s) {
+    const n = s && s.contextTokens;
+    if (!n) return '';
+    return n >= CTX_HUGE ? 'ctx-huge' : n >= CTX_HEAVY ? 'ctx-heavy' : '';
+  }
+
+  // claude-opus-5-5 -> opus, so a successor starts on the same tier.
+  function aliasOf(model) {
+    const m = /(opus|sonnet|haiku)/.exec(model || '');
+    return m ? m[1] : undefined;
+  }
+
+  async function handOff(s) {
+    toast('writing a handoff for ' + (s.title || 'that session') + '…');
+    const res = await window.board.handoff({
+      sessionId: s.sessionId, title: s.title, model: aliasOf(s.model), slot: liveSlots(),
+    });
+    toast(res.ok ? res.out : res.error);
+  }
+
   function tokenLine(s) {
     if (s.contextTokens == null && s.totalTokens == null) return '';
     return `${fmtTokens(s.contextTokens)} ctx · ${fmtTokens(s.totalTokens)} total`;
@@ -632,11 +670,12 @@
       <div style="min-width:0">
         <div class="title">${esc(s.title)}</div>
         <div class="meta">${esc(meta)}${peerOf(s) ? ' · ' + esc(peerOf(s)) : ''}</div>
-        ${tokenLine(s) ? `<div class="meta">${esc(tokenLine(s))}</div>` : ''}
+        ${tokenLine(s) ? `<div class="meta ${ctxLevel(s)}">${esc(tokenLine(s))}</div>` : ''}
         <div class="actions">
           <button data-act="ask" data-id="${s.sessionId}">ask it</button>
           <button data-act="resume" data-id="${s.sessionId}">copy cmd</button>
           ${peerOf(s) ? `<button data-act="peer" data-id="${s.sessionId}">copy handle</button>` : ''}
+          ${ctxLevel(s) ? `<button data-act="handoff" data-id="${s.sessionId}" title="start a fresh session from a summary of this one">hand off</button>` : ''}
         </div>
         ${openAsk === s.sessionId ? askBox(s) : ''}
         ${a ? `<div class="answer ${a.err ? 'err' : ''}"><span class="who">${a.err ? 'failed' : 'answered from its history' + (a.cost ? ' · ' + esc(a.cost) : '')}</span>${esc(a.text)}</div>` : ''}
@@ -687,6 +726,7 @@
         else if (act === 'peer') window.board.copyPeer(peerOf(s)).then((n) => toast('copied: ' + n));
         else if (act === 'resume') window.board.copyResume(s).then((c) => toast('copied: ' + c));
         else if (act === 'send') send(s);
+        else if (act === 'handoff') handOff(s);
       };
     }
 
@@ -1019,6 +1059,8 @@
   function paintChatHeads() {
     const lead = chatTarget();
     el('chatwho').textContent = lead ? (lead.title || lead.sessionId.slice(0, 8)) : 'no live sessions';
+    el('chatwho').className = 'lead ' + ctxLevel(lead);
+    el('chathandoff').hidden = !ctxLevel(lead);
     el('chatwho').title = lead
       ? 'chatting with ' + (lead.title || lead.sessionId) + (tokenLine(lead) ? ' · ' + tokenLine(lead) : '')
       : '';
@@ -1032,10 +1074,11 @@
       const asked = p ? (p.what ? p.name + ': ' + p.what : 'to use ' + p.name) : (s.waitingFor || 'an answer');
       return 'waiting for you to allow ' + asked;
     };
-    const html = others.map((s) => `<div class="other" data-id="${esc(s.sessionId)}"
+    const html = others.map((s) => `<div class="other ${ctxLevel(s)}" data-id="${esc(s.sessionId)}"
         title="${esc(s.title || '')} · ${esc(why(s))}${tokenLine(s) ? esc(' · ' + tokenLine(s)) : ''}"
         <span class="pip" style="background: var(--${esc(s.state)})"></span>
         <span class="what">${esc(s.title || s.sessionId.slice(0, 8))}</span>
+        ${ctxLevel(s) ? '<span class="go" data-act="handoff" title="context is large: start a fresh session from a summary of this one">hand off</span>' : ''}
         <span class="go" data-act="show" title="bring its window back">show</span>
         <span class="go" data-act="end" title="end this session">&times;</span></div>`).join('');
     // Sessions that have exited, newest first and only a few: this is a way
@@ -1072,6 +1115,7 @@
         const act = e.target.dataset && e.target.dataset.act;
         if (act === 'show') { e.stopPropagation(); showSession(box.dataset.id); return; }
         if (act === 'end') { e.stopPropagation(); endWorker(box.dataset.id); return; }
+        if (act === 'handoff') { e.stopPropagation(); if (row) handOff(row); return; }
         setLead(box.dataset.id);
       };
     }
@@ -1115,6 +1159,7 @@
   }
 
   el('chatsend').onclick = chatSend;
+  el('chathandoff').onclick = () => { const lead = chatTarget(); if (lead) handOff(lead); };
   el('chatmodel').textContent = chatModel;
   el('chatmodel').onclick = () => {
     chatModel = CHAT_MODELS[(CHAT_MODELS.indexOf(chatModel) + 1) % CHAT_MODELS.length];
