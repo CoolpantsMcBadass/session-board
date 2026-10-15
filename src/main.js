@@ -1049,7 +1049,7 @@ end tell`);
   activate
 end tell`);
   if (!placed.ok) return placed;
-  const who = clean ? `${clean} started` : 'opened';
+  const who = (clean ? `${clean} started` : 'opened') + (model ? ` on ${model}` : '');
   return { ok: true, out: `${who} in ${dir.replace(app.getPath('home'), '~')}` };
 });
 

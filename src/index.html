@@ -469,6 +469,14 @@
           <option value="acceptEdits">edits without asking</option>
           <option value="plan">plan only, no changes</option>
         </select></label>
+        <!-- Sonnet every time the form opens, never the last pick: a hire is
+             usually a specialist that reads, tests and reports, and Opus as the
+             sticky choice is how a board full of workers quietly costs 5x. -->
+        <label class="fld">model<select id="hmodel">
+          <option value="sonnet">sonnet: most workers</option>
+          <option value="opus">opus: a lead, or hard reasoning</option>
+          <option value="haiku">haiku: quick, narrow jobs</option>
+        </select></label>
         <div class="fld-row"><button id="hgo">hire</button><button id="hcancel">cancel</button></div>
       </div>
       <div class="pop" id="opop" hidden>
@@ -1213,6 +1221,7 @@
     if (!on) return;
     showMore(false);
     el('ohirepop').style.top = el('onew').offsetTop + 'px';
+    el('hmodel').value = 'sonnet';
     el('hname').focus();
   }
   el('onew').onclick = (e) => { e.stopPropagation(); showHire(el('ohirepop').hidden); };
@@ -1227,6 +1236,7 @@
       name,
       purpose: el('hwhy').value.trim(),
       mode: el('hmode').value,
+      model: el('hmodel').value,
     });
     toast(res.ok ? res.out : res.error);
     if (res.ok) { el('hname').value = ''; el('hwhy').value = ''; }

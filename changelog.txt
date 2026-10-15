@@ -390,3 +390,17 @@ v0.11.0 (2026-10-15): the board's own calls pick a model, log their cost, and ch
 - tested end to end through the real app's IPC with playwright _electron:
   consult, chat (message two recalled a codeword from message one, on a
   different model), relay, and a bogus model name falling back to sonnet
+
+v0.12.0 (2026-10-15): hiring picks a model, Sonnet by default
+- the office's hire form had name, purpose and permissions but no model, so
+  every hired worker ran on the user's default (Opus 5.5). It now has a model
+  select: sonnet for most workers, opus for a lead or hard reasoning, haiku for
+  quick narrow jobs
+- resets to sonnet every time the form opens rather than remembering the last
+  pick, so one Opus hire doesn't quietly make every later hire Opus too
+- main already validated and passed --model for the footer's +opus/+sonnet/
+  +haiku buttons (v0.8.0); the hire path now sends it too, and the toast says
+  which model the worker started on
+- tested with the main-process handler stubbed via playwright's app.evaluate,
+  so no Terminal window opened: three hires (default, opus, default) sent
+  sonnet, opus, sonnet, and the form read sonnet on each open
