@@ -436,6 +436,7 @@
       <div class="others gone" id="recent"></div>
         <div class="chat-head">
           <span class="lead" id="chatwho">no lead</span>
+          <button id="chatmodel" title="which model answers here; click to change">sonnet</button>
           <button id="chatnew" title="start again from the lead's latest state">fresh</button>
         </div>
         <div class="chat-log" id="chatlog"></div>
@@ -532,6 +533,13 @@
   // never wrong by much; total can run into the hundreds of millions on a
   // long session (every turn re-bills whatever of its prompt came from
   // cache), where one decimal place is still the honest size of the number.
+  // What one board-made call cost, from the usage block claude -p returns.
+  // Shown beside every answer so the price of a click is never a surprise.
+  function costLine(c) {
+    if (!c) return '';
+    return `${c.model} · ${fmtTokens(c.tokens)} tok · $${c.usd < 0.01 ? c.usd.toFixed(4) : c.usd.toFixed(3)}`;
+  }
+
   function fmtTokens(n) {
     if (n == null) return '—';
     if (n < 1000) return String(n);
@@ -623,7 +631,7 @@
           ${peerOf(s) ? `<button data-act="peer" data-id="${s.sessionId}">copy handle</button>` : ''}
         </div>
         ${openAsk === s.sessionId ? askBox(s) : ''}
-        ${a ? `<div class="answer ${a.err ? 'err' : ''}"><span class="who">${a.err ? 'failed' : 'answered from its history'}</span>${esc(a.text)}</div>` : ''}
+        ${a ? `<div class="answer ${a.err ? 'err' : ''}"><span class="who">${a.err ? 'failed' : 'answered from its history' + (a.cost ? ' · ' + esc(a.cost) : '')}</span>${esc(a.text)}</div>` : ''}
       </div>
     </div>`;
   }
@@ -706,7 +714,7 @@
     renderList();
     window.board.consult({ sessionId: s.sessionId, cwd: s.cwd, question }).then((res) => {
       answers[s.sessionId] = res.ok
-        ? { text: res.answer, err: false }
+        ? { text: res.answer, err: false, cost: costLine(res.cost) }
         : { text: res.error, err: true };
       renderList();
     });
@@ -965,6 +973,13 @@
   let chatForkId = null;
   let chatBusy = false;
 
+  // Sonnet by default; the button cycles through the three for the moments a
+  // question deserves Opus or is simple enough for Haiku. Switching mid-chat is
+  // fine: the next message resumes the same conversation on the new model.
+  const CHAT_MODELS = ['sonnet', 'opus', 'haiku'];
+  let chatModel = 'sonnet';
+  try { if (CHAT_MODELS.includes(localStorage.getItem('chatModel'))) chatModel = localStorage.getItem('chatModel'); } catch { /* private window */ }
+
   // Which session the chat talks to. Remembered across restarts because it is a
   // standing choice about how the board is being used, not a per-session one,
   // and falling back to a different session each launch would make the chat
@@ -1079,18 +1094,25 @@
       forkId: chatForkId,
       cwd: target.cwd,
       message: text,
+      model: chatModel,
     });
     chatBusy = false;
     pending.remove();
     if (res.ok) {
       chatForkId = res.forkId || chatForkId;
-      say('them', target.title || 'session', res.answer || '(said nothing)');
+      say('them', `${target.title || 'session'} · ${costLine(res.cost)}`, res.answer || '(said nothing)');
     } else {
       say('err', 'board', res.error || 'no answer');
     }
   }
 
   el('chatsend').onclick = chatSend;
+  el('chatmodel').textContent = chatModel;
+  el('chatmodel').onclick = () => {
+    chatModel = CHAT_MODELS[(CHAT_MODELS.indexOf(chatModel) + 1) % CHAT_MODELS.length];
+    el('chatmodel').textContent = chatModel;
+    try { localStorage.setItem('chatModel', chatModel); } catch { /* private window */ }
+  };
   el('chatin').onkeydown = (e) => {
     // Enter sends, since this is a chat box and not a document. A newline is
     // still reachable with shift, which is the convention everywhere else.

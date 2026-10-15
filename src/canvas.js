@@ -289,7 +289,7 @@
           ${inFlight.has(selected) ? 'sending…' : 'send context'}
         </button>
       </div>
-      ${ans ? `<div class="answer ${ans.err ? 'err' : ''}"><span class="who">${ans.err ? 'failed' : esc(b.title) + ' replied'}</span>${esc(ans.text)}</div>` : ''}`;
+      ${ans ? `<div class="answer ${ans.err ? 'err' : ''}"><span class="who">${ans.err ? 'failed' : esc(b.title) + ' replied' + (ans.cost ? ' · ' + esc(ans.cost) : '')}</span>${esc(ans.text)}</div>` : ''}`;
 
     for (const btn of box.querySelectorAll('button[data-comp]')) {
       btn.onclick = () => {
@@ -325,7 +325,10 @@
       toId: b.sessionId, toCwd: b.cwd, question,
     }).then((res) => {
       inFlight.delete(id);
-      answers[id] = res.ok ? { text: res.answer, err: false } : { text: res.error, err: true };
+      const c = res.cost;
+      answers[id] = res.ok
+        ? { text: res.answer, err: false, cost: c ? `${c.model} · $${c.usd.toFixed(4)}` : '' }
+        : { text: res.error, err: true };
       render();
     });
   }

@@ -355,3 +355,38 @@ v0.10.0 (2026-10-13): context and token-use counters per worker
   about what they are; a session that looks alarming at "150M total" is
   mostly cheap cache re-reads billed at a fraction of fresh-input price, not
   150M tokens of fresh processing, and this doesn't try to tell them apart
+
+v0.11.0 (2026-10-15): the board's own calls pick a model, log their cost, and chat stops replaying transcripts
+- consult, relay and chat never passed --model, so they ran on whatever the
+  user's default was. With Opus 5.5 as the default, every "ask it" click cost
+  ~36x what Haiku charges for the same answer (measured: $0.066 vs $0.0018 for
+  a one-word reply). A JOBS table in main.js now names the model per job:
+  consult and relay run on Haiku at --effort low, chat runs on Sonnet
+- every call also passes --tools Read,Grep,Glob. Each tool definition rides in
+  the prompt, and narrowing to the read-only three took a call's fixed cost
+  from ~17K tokens to ~6K. These run under -p with no permission mode, so the
+  write tools were being refused anyway
+- --bare was tried and rejected: it skips keychain reads, so on a subscription
+  login it fails before reaching the API (comes back with zero usage)
+- all three now go through one runJob() with --output-format json, which
+  appends a line per call to usage.jsonl in the app data dir (job, model,
+  input/cache/output tokens, dollars, ms, prompt size, resumed or not), and
+  shows "haiku · 7K tok · $0.0008" beside each answer in the list, the map's
+  composer and the office chat
+- chat no longer does --resume --fork-session on the lead. The first message
+  starts a fresh process seeded with the same bounded digest() excerpt consult
+  uses; later messages resume that small conversation. A follow-up now costs
+  what the chat has grown to, not what the lead's whole history weighs
+- total_cost_usd on a resumed session is the running total for the whole
+  conversation, not that call's share; found by the usage log on the first
+  test run (message two reported $0.0149 when its own share was ~$0.0007).
+  Each conversation's last total is remembered and only the difference charged
+- office chat header gets a model button (sonnet -> opus -> haiku), remembered
+  across restarts; switching mid-chat resumes the same conversation on the new
+  model. main validates it against the same three aliases as hiring and falls
+  back to the job's default for anything else
+- SB_USERDATA overrides the userData dir, so a test copy runs beside the
+  installed board instead of standing down to its single-instance lock
+- tested end to end through the real app's IPC with playwright _electron:
+  consult, chat (message two recalled a codeword from message one, on a
+  different model), relay, and a bogus model name falling back to sonnet

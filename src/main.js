@@ -15,7 +15,9 @@ const demoFeed = require('./demo-feed');
 // single-instance lock lives in that directory too and would not see across
 // them. Pin both to the path the board has always used. Must happen before
 // anything reads a path, and before the lock is asked for.
-app.setPath('userData', path.join(app.getPath('appData'), 'session-board'));
+// SB_USERDATA moves both, which is what lets a test copy run beside the
+// installed board instead of standing down to it.
+app.setPath('userData', process.env.SB_USERDATA || path.join(app.getPath('appData'), 'session-board'));
 
 const CLAUDE_BIN = process.env.SB_CLAUDE_BIN || '/opt/homebrew/bin/claude';
 const CONSULT_TIMEOUT_MS = 180000;
@@ -26,6 +28,24 @@ const CONSULT_TIMEOUT_MS = 180000;
 // with the right cwd, so it can read live files if the excerpt isn't enough.
 const BRIEF_MAX_CHARS = 8000;
 const BRIEF_MAX_TURNS = 20;
+
+// Which model runs each kind of call the board makes on its own. Without a
+// --model these inherited whatever the user's default was, so making Opus the
+// default quietly made every ask cost ~36x what Haiku charges for the same
+// answer (measured 2026-10-15: $0.066 vs $0.0018). Ask and relay read an
+// excerpt and summarise it, which is Haiku's job; chat is a conversation
+// someone is actually steering, so it gets Sonnet unless the panel says otherwise.
+//
+// The tool list matters as much as the model: each tool's definition rides in
+// the prompt, and narrowing to the three read-only ones took the fixed cost of
+// a call from ~17K tokens to ~6K. These calls run under -p with no permission
+// mode, so anything that writes was being refused anyway.
+const JOBS = {
+  consult: { model: 'haiku', effort: 'low' },
+  relay:   { model: 'haiku', effort: 'low' },
+  chat:    { model: 'sonnet' },
+};
+const JOB_TOOLS = 'Read,Grep,Glob';
 
 const COLLAPSED_W = 58;
 const EXPANDED_W = 390;
@@ -488,6 +508,89 @@ function runClaude(args, options, done) {
   return child;
 }
 
+// Every call the board makes goes through here, so model choice, the tool list
+// and the cost record live in one place. json output is what carries back the
+// session id (chat needs it) and the usage block (the log needs it).
+const USAGE_FILE = () => path.join(app.getPath('userData'), 'usage.jsonl');
+// total_cost_usd on a resumed session is the running total for that whole
+// conversation, not this call's share, so the second chat message would report
+// the first one's cost again on top of its own. Remember each conversation's
+// last total and charge each call only the difference.
+const lastTotalUsd = new Map();
+
+function runJob(job, { prompt, resumeId, cwd, model }, done) {
+  const spec = JOBS[job];
+  const useModel = model && MODEL_ALIASES.has(model) ? model : spec.model;
+  const args = [];
+  if (resumeId) args.push('--resume', resumeId);
+  args.push(
+    '--model', useModel,
+    '--tools', JOB_TOOLS,
+    '--strict-mcp-config',
+    '--mcp-config', '{"mcpServers":{}}',
+    '--output-format', 'json',
+  );
+  if (spec.effort) args.push('--effort', spec.effort);
+  args.push('-p', prompt);
+  const started = Date.now();
+  runClaude(args, {
+    cwd: cwd && fsExists(cwd) ? cwd : undefined,
+    timeout: CONSULT_TIMEOUT_MS,
+    maxBuffer: 16 << 20,
+  }, (err, stdout, stderr) => {
+    let parsed = null;
+    try { parsed = JSON.parse((stdout || '').trim()); } catch { /* not json */ }
+    const answer = parsed && typeof parsed.result === 'string' ? parsed.result.trim() : '';
+    if (!parsed || parsed.is_error || !answer) {
+      done({ ok: false, error: (parsed && parsed.is_error && answer) || whyItFailed(err, stderr) });
+      return;
+    }
+    const u = parsed.usage || {};
+    const cost = {
+      model: useModel,
+      tokens: (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0)
+        + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0),
+      usd: 0,
+    };
+    const total = parsed.total_cost_usd || 0;
+    const sid = parsed.session_id;
+    cost.usd = Math.max(0, total - ((resumeId && lastTotalUsd.get(resumeId)) || 0));
+    if (sid) lastTotalUsd.set(sid, total);
+    // A log line is a convenience, never a reason to lose an answer.
+    try {
+      fs.mkdirSync(path.dirname(USAGE_FILE()), { recursive: true });
+      fs.appendFileSync(USAGE_FILE(), JSON.stringify({
+        at: new Date(started).toISOString(), job, ...cost,
+        input: u.input_tokens || 0,
+        cacheWrite: u.cache_creation_input_tokens || 0,
+        cacheRead: u.cache_read_input_tokens || 0,
+        output: u.output_tokens || 0,
+        ms: Date.now() - started,
+        promptChars: prompt.length,
+        resumed: !!resumeId,
+      }) + '\n');
+    } catch { /* unwritable log: carry on */ }
+    done({ ok: true, answer, sessionId: parsed.session_id || null, cost });
+  });
+}
+
+// A brief is prefixed to the first message so the fresh process knows whose
+// work it is looking at, and that the excerpt is not its own memory.
+function withBrief(brief, rest) {
+  return [
+    'Here is a recent excerpt of a Claude Code conversation that ran in this',
+    'directory. You are a fresh process, not that session; the excerpt is',
+    'context, not your own memory. Read live files yourself if you need more',
+    'than the excerpt gives you.',
+    '',
+    '--- begin excerpt ---',
+    brief,
+    '--- end excerpt ---',
+    '',
+    rest,
+  ].join('\n');
+}
+
 // Ask another session a question against a recent excerpt of its own history,
 // not a full --resume fork: that replayed the whole transcript as input tokens
 // for every click. The fork still runs in the session's own cwd, so it can read
@@ -505,72 +608,37 @@ ipcMain.handle('consult', (_e, { sessionId, cwd, question }) => {
       resolve({ ok: false, error: 'nothing readable in that session yet' });
       return;
     }
-    const prompt = [
-      'Here is a recent excerpt of a Claude Code conversation that ran in this',
-      'directory. You are a fresh process, not that session; the excerpt is',
-      'context, not your own memory. Read live files yourself if you need more',
-      'than the excerpt gives you.',
-      '',
-      '--- begin excerpt ---',
-      brief,
-      '--- end excerpt ---',
-      '',
-      question.trim(),
-    ].join('\n');
-    const args = [
-      '--strict-mcp-config',
-      '--mcp-config', '{"mcpServers":{}}',
-      '-p', prompt,
-    ];
-    runClaude(args, {
-      cwd: cwd && fsExists(cwd) ? cwd : undefined,
-      timeout: CONSULT_TIMEOUT_MS,
-      maxBuffer: 16 << 20,
-    }, (err, stdout, stderr) => {
-      const answer = (stdout || '').trim();
-      if (answer) resolve({ ok: true, answer });
-      else resolve({ ok: false, error: (err && err.message) || (stderr || '').trim() || 'no answer' });
-    });
+    runJob('consult', { prompt: withBrief(brief, question.trim()), cwd }, resolve);
   });
 });
 
-// Chat is consult with a memory. The first message forks the session, which
-// gives the reply everything that session knows up to that moment; every reply
-// carries the fork's own id back, and later messages resume the fork instead of
-// making a new one, so the panel holds a conversation rather than a series of
-// unrelated questions.
+// Chat is consult with a memory. The first message starts a fresh process
+// seeded with the same bounded excerpt consult uses; every reply carries that
+// conversation's own id back, and later messages resume it, so the panel holds
+// a conversation rather than a series of unrelated questions.
+//
+// It used to --resume --fork-session the real session, which replayed the whole
+// transcript (often 100K+ tokens) on the first message and resent it with every
+// follow-up. Resuming the small seeded conversation instead means a follow-up
+// costs what the chat itself has grown to, not what the lead's history has.
 //
 // What this is not: it never reaches the live session. The person at that
-// terminal sees nothing, and nothing typed here can make them act. The fork is
-// a copy that read their history, and it stops learning at the moment it was
-// made, which is why the panel can start a fresh one.
-ipcMain.handle('chat', (_e, { sessionId, forkId, cwd, message }) => {
+// terminal sees nothing, and nothing typed here can make them act. The chat is
+// a separate process that read their recent history, and it stops learning at
+// the moment it started, which is why the panel can start a fresh one.
+ipcMain.handle('chat', (_e, { sessionId, forkId, cwd, message, model }) => {
   return new Promise((resolve) => {
     if (!message || !message.trim()) { resolve({ ok: false, error: 'nothing to say' }); return; }
     if (!forkId && !sessionId) { resolve({ ok: false, error: 'no session to talk to' }); return; }
-    const args = forkId
-      ? ['--resume', forkId]
-      : ['--resume', sessionId, '--fork-session'];
-    args.push(
-      '--strict-mcp-config',
-      '--mcp-config', '{"mcpServers":{}}',
-      // json carries the fork's session id back, which is the whole mechanism:
-      // without it every message would start a new conversation.
-      '--output-format', 'json',
-      '-p', message.trim(),
-    );
-    runClaude(args, {
-      cwd: cwd && fsExists(cwd) ? cwd : undefined,
-      timeout: CONSULT_TIMEOUT_MS,
-      maxBuffer: 16 << 20,
-    }, (err, stdout, stderr) => {
-      let parsed = null;
-      try { parsed = JSON.parse((stdout || '').trim()); } catch { /* not json */ }
-      if (parsed && (parsed.result || parsed.session_id)) {
-        resolve({ ok: true, answer: (parsed.result || '').trim(), forkId: parsed.session_id || forkId });
-        return;
-      }
-      resolve({ ok: false, error: whyItFailed(err, stderr) });
+    let prompt = message.trim();
+    if (!forkId) {
+      const brief = digest(sessionId, BRIEF_MAX_CHARS, BRIEF_MAX_TURNS);
+      if (!brief) { resolve({ ok: false, error: 'nothing readable in that session yet' }); return; }
+      prompt = withBrief(brief, prompt);
+    }
+    runJob('chat', { prompt, resumeId: forkId, cwd, model }, (res) => {
+      if (res.ok) res.forkId = res.sessionId || forkId;
+      resolve(res);
     });
   });
 });
@@ -639,19 +707,7 @@ ipcMain.handle('relay', (_e, { fromId, fromTitle, toId, toCwd, question }) => {
       question || 'What stands out to you here? Be specific and brief.',
     ].join('\n');
 
-    runClaude([
-      '--strict-mcp-config',
-      '--mcp-config', '{"mcpServers":{}}',
-      '-p', prompt,
-    ], {
-      cwd: toCwd && fsExists(toCwd) ? toCwd : undefined,
-      timeout: CONSULT_TIMEOUT_MS,
-      maxBuffer: 16 << 20,
-    }, (err, stdout, stderr) => {
-      const answer = (stdout || '').trim();
-      if (answer) resolve({ ok: true, answer });
-      else resolve({ ok: false, error: (err && err.message) || (stderr || '').trim() || 'no answer' });
-    });
+    runJob('relay', { prompt, cwd: toCwd }, resolve);
   });
 });
 
