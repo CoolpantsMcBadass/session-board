@@ -54,8 +54,8 @@ const POLL_MS = 2000;
 let win = null;
 let expanded = false;
 // Which of the three expanded views is showing. The rail is not one of them:
-// that is the collapsed state, and reopening always comes back to the list.
-let view = 'list';
+// that is the collapsed state, and reopening always comes back to the office.
+let view = 'office';
 let timer = null;
 let lastPayload = '';
 let lastSnapshot = null;
@@ -294,9 +294,10 @@ function setExpanded(next) {
   // shortcut would silently do nothing.
   if (stowed) setStowed(false);
   expanded = next;
-  // Collapsing ends the map: reopening the panel always comes back to the list,
-  // which is the view that answers "what is running" at a glance.
-  if (!expanded) view = 'list';
+  // Collapsing ends whichever view was open: reopening the panel always comes
+  // back to the office, which answers "what is running" at a glance the same
+  // way the list did, with who's blocked or idle readable from the floor.
+  if (!expanded) view = 'office';
   // Keep the right edge pinned so the strip grows leftwards into the screen.
   applyBounds();
   win.webContents.send('expanded', expanded, view);

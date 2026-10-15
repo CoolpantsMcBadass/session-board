@@ -145,6 +145,7 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
   }
   .foot button:hover { color: var(--ink); }
+  .foot button.on { color: var(--working); }
   .foot .push { margin-left: auto; }
   .toast {
     position: absolute; left: 10px; right: 10px; bottom: 36px;
@@ -448,7 +449,7 @@
         <button class="sq" id="oinvert">blueprint</button>
         <button class="sq" id="omeet">meet at<br>table</button>
         <div class="rule"></div>
-        <button class="sq" id="oview">map</button>
+        <button class="sq" id="olist">list</button>
         <button class="sq" id="otile">tile</button>
         <button class="sq" id="ohide">put away</button>
         <button class="sq" id="onew">+ new</button>
@@ -477,7 +478,8 @@
     <div id="composer" hidden></div>
     <div class="foot" id="foot">
       <button id="collapse">collapse</button>
-      <button id="view">map</button>
+      <button id="view-map">map</button>
+      <button id="view-office">office</button>
       <button id="tile">tile</button>
       <button id="new-opus" title="open a new session on Opus">+opus</button>
       <button id="new-sonnet" title="open a new session on Sonnet">+sonnet</button>
@@ -504,11 +506,13 @@
     closed: '',
   };
   let expanded = false;
-  // The expanded panel shows exactly one of these, and the foot button walks
-  // the ring. Kept as a name rather than a pair of booleans so there is no
-  // state where both the map and the office believe they are open.
-  const NEXT_VIEW = { list: 'map', map: 'office', office: 'list' };
-  let view = 'list';
+  // The expanded panel shows exactly one of these. Kept as a name rather than
+  // a pair of booleans so there is no state where both the map and the office
+  // believe they are open. map and office are each a direct toggle: clicking
+  // one twice returns to list, which is otherwise reached only by switching
+  // away from whichever of the two is open.
+  const VIEWS = new Set(['list', 'map', 'office']);
+  let view = 'office';
   let current = { sessions: [], links: [], liveCount: 0, waitingCount: 0 };
   let showRecent = false;
   let onTop = true;
@@ -522,6 +526,26 @@
     if (sec < 3600) return Math.round(sec / 60) + 'm';
     if (sec < 86400) return Math.round(sec / 3600) + 'h';
     return Math.round(sec / 86400) + 'd';
+  }
+
+  // Context is bounded by a model's window, so three digits of precision is
+  // never wrong by much; total can run into the hundreds of millions on a
+  // long session (every turn re-bills whatever of its prompt came from
+  // cache), where one decimal place is still the honest size of the number.
+  function fmtTokens(n) {
+    if (n == null) return '—';
+    if (n < 1000) return String(n);
+    if (n < 1e6) return Math.round(n / 1e3) + 'K';
+    if (n < 1e9) return (n / 1e6).toFixed(n < 1e7 ? 1 : 0) + 'M';
+    return (n / 1e9).toFixed(1) + 'B';
+  }
+
+  // Context is this turn's prompt; total is every turn's prompt and reply
+  // summed over the session's life, cache reuse counted every time it's
+  // resent, which is also how Claude Code's own cost accounting counts it.
+  function tokenLine(s) {
+    if (s.contextTokens == null && s.totalTokens == null) return '';
+    return `${fmtTokens(s.contextTokens)} ctx · ${fmtTokens(s.totalTokens)} total`;
   }
 
   function folder(s) {
@@ -592,6 +616,7 @@
       <div style="min-width:0">
         <div class="title">${esc(s.title)}</div>
         <div class="meta">${esc(meta)}${peerOf(s) ? ' · ' + esc(peerOf(s)) : ''}</div>
+        ${tokenLine(s) ? `<div class="meta">${esc(tokenLine(s))}</div>` : ''}
         <div class="actions">
           <button data-act="ask" data-id="${s.sessionId}">ask it</button>
           <button data-act="resume" data-id="${s.sessionId}">copy cmd</button>
@@ -710,7 +735,7 @@
   // Which view the panel shows. Split out of setView so the main process can
   // put the renderer back on the list without a round trip back through it.
   function applyView(name) {
-    view = NEXT_VIEW[name] ? name : 'list';
+    view = VIEWS.has(name) ? name : 'office';
     el('list').hidden = view !== 'list';
     el('map').hidden = view !== 'map';
     el('office').hidden = view !== 'office';
@@ -723,11 +748,17 @@
     // footer would be a second copy of the same five buttons. It stays in the
     // DOM either way: the strip drives it rather than reimplementing it.
     el('foot').hidden = view === 'office';
-    el('view').textContent = NEXT_VIEW[view];
-    el('oview').textContent = NEXT_VIEW[view];
+    el('view-map').classList.toggle('on', view === 'map');
+    el('view-office').classList.toggle('on', view === 'office');
     el('sub').textContent = view === 'map'
       ? 'drag to link · right-click a wire to unlink · drop on the bin to end'
       : view === 'office' ? 'one office per live session' : '';
+  }
+
+  // map and office are each a toggle: clicking the one already open goes back
+  // to list, which is otherwise never its own button.
+  function toggleView(name) {
+    setView(view === name ? 'list' : name);
   }
 
   function setView(name) {
@@ -757,7 +788,13 @@
     el('rail').hidden = v;
     el('full').hidden = !v;
     el('wctl').hidden = !v;
-    if (typeof v2 === 'string' && v2 !== view) applyView(v2);
+    // Always applied, not just on a change: the static HTML's own hidden
+    // attributes default to showing list, and if the renderer's own starting
+    // `view` already happens to match what main process sends (both now
+    // default to 'office'), a change-only guard here would skip applyView
+    // forever and leave the DOM stuck on the markup's default instead.
+    // applyView is cheap and idempotent, so there's no cost to always running it.
+    if (typeof v2 === 'string') applyView(v2);
     paint();
   });
   window.board.onError((m) => toast('collector: ' + m));
@@ -877,7 +914,8 @@
 
   el('rail').onclick = () => window.board.toggle(true);
   el('collapse').onclick = () => window.board.toggle(false);
-  el('view').onclick = () => setView(NEXT_VIEW[view]);
+  el('view-map').onclick = () => toggleView('map');
+  el('view-office').onclick = () => toggleView('office');
   function newSession(model) {
     toast(`opening a new ${model} session…`);
     window.board.openSessionWindow({ model, slot: liveSlots() })
@@ -909,10 +947,14 @@
     const b = el(id);
     b.onclick = () => { apply(b.classList.toggle('on')); };
   }
+  // Leaving the office goes straight to list: it's the one other view with no
+  // button of its own to toggle back off, reached only by leaving whichever
+  // of map or office is open.
+  el('olist').onclick = () => setView('list');
   // The strip's board-wide buttons click the footer's, rather than carrying a
-  // second copy of the logic. Everything those five do (tiling, opening a
-  // session, cycling the view) stays defined in exactly one place.
-  for (const [from, to] of [['oview', 'view'], ['otile', 'tile'],
+  // second copy of the logic. Everything those three do (tiling, refreshing,
+  // collapsing) stays defined in exactly one place.
+  for (const [from, to] of [['otile', 'tile'],
                             ['orefresh', 'refresh'], ['ocollapse', 'collapse']]) {
     el(from).onclick = () => el(to).click();
   }
@@ -954,7 +996,9 @@
   function paintChatHeads() {
     const lead = chatTarget();
     el('chatwho').textContent = lead ? (lead.title || lead.sessionId.slice(0, 8)) : 'no live sessions';
-    el('chatwho').title = lead ? 'chatting with ' + (lead.title || lead.sessionId) : '';
+    el('chatwho').title = lead
+      ? 'chatting with ' + (lead.title || lead.sessionId) + (tokenLine(lead) ? ' · ' + tokenLine(lead) : '')
+      : '';
 
     const others = current.sessions.filter((s) => s.pid && (!lead || s.sessionId !== lead.sessionId));
     // A session held at a permission prompt says what it is asking for, since
@@ -966,7 +1010,7 @@
       return 'waiting for you to allow ' + asked;
     };
     const html = others.map((s) => `<div class="other" data-id="${esc(s.sessionId)}"
-        title="${esc(s.title || '')} · ${esc(why(s))}">
+        title="${esc(s.title || '')} · ${esc(why(s))}${tokenLine(s) ? esc(' · ' + tokenLine(s)) : ''}"
         <span class="pip" style="background: var(--${esc(s.state)})"></span>
         <span class="what">${esc(s.title || s.sessionId.slice(0, 8))}</span>
         <span class="go" data-act="show" title="bring its window back">show</span>

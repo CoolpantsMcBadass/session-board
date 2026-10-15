@@ -48,6 +48,64 @@ const PEER_WINDOW_MS = 6 * 60 * 1000;
 // The head of a transcript is immutable, so its launch cwd is cached for good.
 const headCache = new Map();
 
+// Cumulative token spend for a live session: every assistant turn's usage
+// summed over the session's whole life, not just what the tail read covers.
+// A transcript on this machine runs to tens of MB, so summing it fresh every
+// 2-second poll is not an option. Each file keeps its own cursor instead: the
+// bytes already turned into a running total, and the undecoded tail that
+// didn't yet end on a newline. A poll only ever reads what was appended since
+// the last one, so the cost of this is one full-file read the first time a
+// session is seen live, and a few hundred bytes on every poll after.
+//
+// Scoped to live sessions only (see snapshot()): a closed session's total is
+// never going to change again and isn't worth the first-read cost to learn.
+const usageCache = new Map();
+
+function scanUsage(file, size) {
+  let u = usageCache.get(file);
+  if (!u) { u = { offset: 0, total: 0, context: null, carry: Buffer.alloc(0) }; usageCache.set(file, u); }
+  // The file is shorter than last time: not an append, but a different file
+  // at the same path (a session id is never reused, so this shouldn't happen
+  // in practice, but a stale cursor reading past the real end would throw).
+  if (size < u.offset) { u.offset = 0; u.total = 0; u.context = null; u.carry = Buffer.alloc(0); }
+  if (size <= u.offset) return u;
+
+  const start = u.offset;
+  const fd = fs.openSync(file, 'r');
+  let buf;
+  try {
+    buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, size - start, start);
+  } finally {
+    fs.closeSync(fd);
+  }
+  // However this call ends, the bytes just read are not read again: anything
+  // left incomplete is kept, decoded, in `carry`, not re-fetched from disk.
+  u.offset = size;
+
+  const chunk = Buffer.concat([u.carry, buf]);
+  const lastNL = chunk.lastIndexOf(0x0a);
+  if (lastNL === -1) { u.carry = chunk; return u; }
+  u.carry = chunk.subarray(lastNL + 1);
+
+  for (const line of chunk.subarray(0, lastNL + 1).toString('utf8').split('\n')) {
+    if (!line.trim()) continue;
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    if (e.type !== 'assistant') continue;
+    const usage = (e.message || {}).usage;
+    if (!usage) continue;
+    const prompt = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
+    // Every turn is its own billed API call, prompt and all, however much of
+    // that prompt overlaps the turn before it: this is the sum Claude Code's
+    // own cost accounting means by a session's total, not a token count of
+    // unique content.
+    u.total += prompt + (usage.output_tokens || 0);
+    u.context = prompt;
+  }
+  return u;
+}
+
 function sh(cmd, args) {
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout: 4000, maxBuffer: 8 << 20 }, (err, stdout) => {
@@ -261,6 +319,11 @@ function describe(file) {
   let title = null;
   let cwd = null;
   let turn = null;
+  // The newest assistant turn's own usage block: input_tokens plus both cache
+  // fields is exactly what that API call sent as the prompt, which is the
+  // context window's current fill. Walking backward for title/cwd/turn
+  // already passes this same entry, so it costs nothing extra to also keep.
+  let usage = null;
   const peerEvents = [];
   const cutoff = Date.now() - PEER_WINDOW_MS;
   let pastWindow = false;
@@ -290,10 +353,17 @@ function describe(file) {
         done: e.type === 'assistant' && kind === 'text',
       };
     }
+    if (!usage && e.type === 'assistant') {
+      const u = (e.message || {}).usage;
+      if (u) usage = u;
+    }
     // The peer walk has its own stopping point, so the usual one is not
     // enough on its own any more.
-    if (title && cwd && turn && pastWindow) break;
+    if (title && cwd && turn && usage && pastWindow) break;
   }
+  const contextTokens = usage
+    ? (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0)
+    : null;
 
   // The cwd on a transcript line follows the shell as it moves, so the only
   // value comparable to a process's cwd is the one the session launched in.
@@ -327,6 +397,7 @@ function describe(file) {
     turn,
     pendingTool: pendingToolOf(entries),
     peerEvents,
+    contextTokens,
   };
 }
 
@@ -447,6 +518,21 @@ async function snapshot(opts = {}) {
 
   const ttyMap = await ttysFor(described.filter((s) => s.pid).map((s) => s.pid));
   for (const s of described) if (s.pid) s.tty = ttyMap[s.pid] || null;
+
+  // Cumulative spend, live sessions only: see scanUsage()'s own comment for
+  // why a closed session is never worth the first-read cost.
+  for (const s of described) {
+    if (!s.pid || !s.file) continue;
+    let size;
+    try { size = fs.statSync(s.file).size; } catch { continue; }
+    const u = scanUsage(s.file, size);
+    s.totalTokens = u.total || null;
+    // The tail read in describe() usually already has the newest turn, but a
+    // session that just started or whose newest turn fell outside that read
+    // has nothing there yet; the full-file scan has seen everything, so it
+    // wins when describe() came back empty.
+    if (s.contextTokens == null) s.contextTokens = u.context;
+  }
 
   const now = Date.now();
   for (const s of described) {

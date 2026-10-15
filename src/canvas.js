@@ -232,7 +232,12 @@
 
     const nodeHtml = nodes.map((n) => {
       const p = board.positions[n.sessionId];
-      return `<div class="node is-${n.state}" data-id="${esc(n.sessionId)}" style="left:${p.x}px;top:${p.y}px">
+      // A fourth line would overflow the node's fixed height, so token use
+      // rides the node's own title instead of printed text, the same way the
+      // port's title carries its own explanation rather than a label.
+      const tokens = typeof tokenLine === 'function' ? tokenLine(n) : '';
+      return `<div class="node is-${n.state}" data-id="${esc(n.sessionId)}" style="left:${p.x}px;top:${p.y}px"
+          ${tokens ? `title="${esc(tokens)}"` : ''}>
         <div class="node-top"><span class="dot ${n.state}"></span><span class="node-title">${esc(n.title)}</span></div>
         <div class="node-meta">${esc(n.state)}${n.cwdShort ? ' · ' + esc(n.cwdShort) : ''}</div>
         <div class="port" data-port="${esc(n.sessionId)}" title="drag to another session to link them"></div>

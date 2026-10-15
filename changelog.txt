@@ -302,3 +302,56 @@ v0.9.0 (2026-10-13): the office view, merged in from the separate fork
   "Session Board Office" says "Session Board" again
 - canvas.js (map mode) and preload.js came over unchanged or as a pure
   superset; nothing about map mode changed in the fork
+
+v0.9.1 (2026-10-13): office is a button now, and the default on expand
+- the footer's single cycling "view" button (list -> map -> office -> list)
+  is now two direct toggles, "map" and "office": click one to open it, click
+  the open one again to go back to list. list itself still has no button of
+  its own, the same as before, since it's reached by leaving whichever of the
+  other two is open, not by switching to it
+- the office's own strip no longer mirrors a "map"-labelled cycle button;
+  "list" replaces it, since leaving the office always meant going to list and
+  the strip already carries its own map/office-equivalent via the footer
+  being hidden while the office is open
+- reopening the panel (and the very first launch) now comes back to the
+  office instead of the list, both the main-process default and what
+  collapsing resets `view` to
+- found and fixed while testing this: the renderer's own `view` was also
+  defaulted to 'office' to match, which broke the onExpanded handler's
+  change-only guard (`v2 !== view`) the moment both sides already agreed on
+  the same value on a cold start, applyView() never ran, and the office div
+  sat stuck on the static HTML's own `hidden` attribute despite the `view`
+  variable correctly saying 'office'. onExpanded now always calls applyView()
+  when a view name arrives, change or not; it's cheap and idempotent, so
+  there's nothing to protect by skipping it
+
+v0.10.0 (2026-10-13): context and token-use counters per worker
+- every assistant turn in a transcript already carries the API's own `usage`
+  block (input/output/cache token counts); collector.js now reads it instead
+  of leaving it on the floor
+- contextTokens: the newest turn's input + cache_creation + cache_read, which
+  is exactly the size of what was last sent as the prompt, i.e. how full the
+  context window is right now. Comes nearly free: it's read off the same
+  backward walk through the tail that already finds title/cwd/turn, no extra
+  I/O. Computed for every tracked session, closed ones included, since it
+  costs nothing extra once that walk is already happening
+- totalTokens: every turn's prompt-plus-reply summed over the session's whole
+  life, the same way Claude Code's own cost accounting counts it (cache reuse
+  billed, and counted, every time it's resent, not once). This one isn't free:
+  a transcript runs to tens of MB, so summing it fresh every 2-second poll was
+  never an option. Each file keeps its own cursor (scanUsage() in
+  collector.js) of bytes already turned into a running total plus whatever
+  undecoded tail didn't yet end on a newline, so a poll only ever reads what
+  was appended since the last one. Scoped to live sessions only (has a pid):
+  the first time a session is seen live costs one full-file read, a closed
+  session's total will never change again and isn't worth paying that to learn
+- shown as "142K ctx · 310M total" (fmtTokens()/tokenLine() in index.html):
+  list row meta, the office's ball tooltips and "others"/lead chat-head
+  titles, and the map node's own title attribute (no room for a third printed
+  line in a 172x60 node, so it rides the tooltip the port's title already
+  used that same way)
+- deliberately not a dollar figure: pricing varies by model and tier and a
+  hardcoded table would go stale and mislead. The raw token counts are honest
+  about what they are; a session that looks alarming at "150M total" is
+  mostly cheap cache re-reads billed at a fraction of fresh-input price, not
+  150M tokens of fresh processing, and this doesn't try to tell them apart

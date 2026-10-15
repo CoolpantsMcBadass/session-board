@@ -169,7 +169,8 @@
         el.style.left = (b.x * 100) + '%';
         el.style.top = (b.y * 100) + '%';
       }
-      el.title = `${b.title || ''} · office ${b.office}`;
+      const tokens = typeof tokenLine === 'function' ? tokenLine(b) : '';
+      el.title = `${b.title || ''} · office ${b.office}${tokens ? ' · ' + tokens : ''}`;
     }
     for (const [id, el] of els) {
       if (seen.has(id)) continue;

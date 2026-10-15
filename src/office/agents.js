@@ -182,6 +182,8 @@
       if (!ball) continue;
       ball.state = s.state;
       ball.title = s.title;
+      ball.contextTokens = s.contextTokens;
+      ball.totalTokens = s.totalTokens;
       reaim(ball, placeFor(s.sessionId, ball, clusters, active));
     }
   }
@@ -232,6 +234,8 @@
       office: b.office,
       state: b.state,
       title: b.title,
+      contextTokens: b.contextTokens,
+      totalTokens: b.totalTokens,
       place: b.place,
       x: b.pos.x,
       y: b.pos.y,
