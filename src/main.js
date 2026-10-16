@@ -8,6 +8,7 @@ function fsExists(p) {
 const { execFile } = require('child_process');
 const { snapshot, digest, handoffBrief } = require('./collector');
 const { createUsage } = require('./usage');
+const { JOBS, jobArgs, probeArgs } = require('./jobs');
 const demoFeed = require('./demo-feed');
 
 // A dev run is `electron .`, named after the package; the installed app is
@@ -30,23 +31,7 @@ const CONSULT_TIMEOUT_MS = 180000;
 const BRIEF_MAX_CHARS = 8000;
 const BRIEF_MAX_TURNS = 20;
 
-// Which model runs each kind of call the board makes on its own. Without a
-// --model these inherited whatever the user's default was, so making Opus the
-// default quietly made every ask cost ~36x what Haiku charges for the same
-// answer (measured 2026-10-15: $0.066 vs $0.0018). Ask and relay read an
-// excerpt and summarise it, which is Haiku's job; chat is a conversation
-// someone is actually steering, so it gets Sonnet unless the panel says otherwise.
-//
-// The tool list matters as much as the model: each tool's definition rides in
-// the prompt, and narrowing to the three read-only ones took the fixed cost of
-// a call from ~17K tokens to ~6K. These calls run under -p with no permission
-// mode, so anything that writes was being refused anyway.
-const JOBS = {
-  consult: { model: 'haiku', effort: 'low' },
-  relay:   { model: 'haiku', effort: 'low' },
-  chat:    { model: 'sonnet' },
-};
-const JOB_TOOLS = 'Read,Grep,Glob';
+// Models, tools and flags for the board's own claude calls: see jobs.js.
 
 const COLLAPSED_W = 58;
 const EXPANDED_W = 390;
@@ -528,17 +513,7 @@ const lastTotalUsd = new Map();
 function runJob(job, { prompt, resumeId, cwd, model }, done) {
   const spec = JOBS[job];
   const useModel = model && MODEL_ALIASES.has(model) ? model : spec.model;
-  const args = [];
-  if (resumeId) args.push('--resume', resumeId);
-  args.push(
-    '--model', useModel,
-    '--tools', JOB_TOOLS,
-    '--strict-mcp-config',
-    '--mcp-config', '{"mcpServers":{}}',
-    '--output-format', 'json',
-  );
-  if (spec.effort) args.push('--effort', spec.effort);
-  args.push('-p', prompt);
+  const args = jobArgs(job, { prompt, resumeId, model: useModel });
   const started = Date.now();
   runClaude(args, {
     cwd: cwd && fsExists(cwd) ? cwd : undefined,
@@ -1107,18 +1082,7 @@ function probeLimits() {
   return new Promise((resolve) => {
     if (limitsBusy) { resolve(limits); return; }
     limitsBusy = true;
-    runClaude([
-      '--model', 'haiku',
-      '--tools', 'Read',
-      '--strict-mcp-config',
-      '--mcp-config', '{"mcpServers":{}}',
-      '--output-format', 'stream-json',
-      '--verbose',
-      // Without this every probe leaves a transcript behind: ~96 files a day
-      // in ~/.claude/projects, each one more for the usage scan to read.
-      '--no-session-persistence',
-      '-p', 'Reply with just: ok',
-    ], { cwd: app.getPath('userData'), timeout: 60000, maxBuffer: 4 << 20 }, (err, stdout) => {
+    runClaude(probeArgs(), { cwd: app.getPath('userData'), timeout: 60000, maxBuffer: 4 << 20 }, (err, stdout) => {
       limitsBusy = false;
       for (const line of (stdout || '').split('\n')) {
         if (!line.includes('rate_limit_event')) continue;

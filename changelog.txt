@@ -499,3 +499,23 @@ v0.15.0 (2026-10-15): the plan's real usage limits, as bars under the header
 - tested in the real app: real values appeared ~7s after launch (5-hour 7%,
   weekly 5%), injected 95% / 80% painted red / amber, a click brought the
   real values back (8%), screenshots checked at office and list widths
+
+2026-10-16  v0.16.0  half the fixed cost per board call, and a test that keeps it there
+
+- jobs.js (new): the arguments for every claude call the board makes (ask, chat,
+  relay, limits probe) now live in one module that main.js and the test both use,
+  so the test checks the real flags rather than a copy of them
+- jobs.js: board calls now pass a short --system-prompt of their own instead of
+  Claude Code's default one, which is written for a coding agent at a terminal.
+  Measured: fixed cost per ask/chat/relay 6.5K -> 3.3K prompt tokens, limits
+  probe -> 1.7K. The tools keep their own instructions, so reading files still works.
+  The prompt also says no em-dashes.
+- tools/token-check.js (new, `npm run check-tokens`): runs the real CLI with those
+  flags (~$0.02 at API prices, ~30s) and checks (1) each job's fixed overhead
+  against a 4K budget, (2) that answers are still right: ask reads the excerpt and
+  a live file, chat remembers across a resume, relay answers, the probe still returns
+  the usage-limit reading, (3) which further trims would still save tokens, split into
+  free savings and trade-offs, (4) per-job averages from the app's usage log
+- measured and rejected: --disable-slash-commands and --setting-sources '' save
+  nothing on top of this. Dropping Grep/Glob would save 1.5K per call but leave
+  ask unable to search or find files by name; left as a reported trade-off
