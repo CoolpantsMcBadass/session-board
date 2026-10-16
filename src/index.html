@@ -143,6 +143,36 @@
   .empty { color: #5a6274; font-size: 11.5px; padding: 18px 6px; text-align: center; }
   .row.is-closed { background: transparent; }
   .row.is-closed .title { color: #9aa2b2; font-weight: 400; }
+  /* Usage panel: an overlay over whichever view is open, so the window never
+     resizes for it. Bars are magnitude, one hue, deliberately none of the
+     state colours (green/amber/red mean a session's state everywhere else).
+     #7b8fd1 checked with the dataviz validator against --bg: passes. */
+  #usage { position: absolute; inset: 0; z-index: 20; background: var(--bg);
+    display: flex; flex-direction: column; min-height: 0; }
+  #usage .u-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px 8px;
+    border-bottom: 1px solid var(--line); }
+  #usage .u-head h2 { font-size: 13px; margin: 0; font-weight: 600; }
+  #usage .u-tabs { display: flex; gap: 2px; margin-left: auto; }
+  #usage button { font: inherit; font-size: 11px; background: transparent; color: var(--ink-dim);
+    border: 1px solid transparent; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+  #usage button:hover { color: var(--ink); }
+  #usage .u-tabs button.on { border-color: var(--line); color: var(--ink); background: var(--bg-row); }
+  #usage .u-body { overflow-y: auto; padding: 14px; flex: 1; min-height: 0; }
+  #usage .u-inner { max-width: 560px; margin: 0 auto; }
+  #usage .u-hero { font-size: 30px; font-weight: 600; letter-spacing: -.01em; }
+  #usage .u-hero small { font-size: 12px; font-weight: 400; color: var(--ink-dim); margin-left: 6px; }
+  #usage .u-stats { color: var(--ink-dim); font-size: 11px; margin-top: 3px; }
+  #usage .u-note { color: var(--ink-dim); font-size: 10.5px; margin-top: 8px; line-height: 1.45; }
+  #usage h3 { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-dim);
+    font-weight: 600; margin: 20px 0 6px; }
+  #usage .u-row { display: grid; grid-template-columns: minmax(0, 1fr) 34% 64px; gap: 8px;
+    align-items: center; padding: 3px 0; font-size: 11.5px; }
+  #usage .u-row:hover { background: var(--bg-row-hover); }
+  #usage .u-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #usage .u-name small { color: var(--ink-dim); margin-left: 5px; }
+  #usage .u-track { height: 8px; }
+  #usage .u-bar { height: 8px; background: #7b8fd1; border-radius: 0 4px 4px 0; min-width: 2px; }
+  #usage .u-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
   .foot {
     display: flex; gap: 5px; align-items: center; flex-wrap: nowrap;
     padding: 7px 9px; border-top: 1px solid var(--line); font-size: 10px; color: var(--ink-dim);
@@ -420,7 +450,7 @@
 
   <div class="rail" id="rail"></div>
 
-  <div id="full" hidden style="display:flex;flex-direction:column;flex:1;min-height:0">
+  <div id="full" hidden style="display:flex;flex-direction:column;flex:1;min-height:0;position:relative">
     <div class="head">
       <h1>Sessions</h1>
       <span class="sub" id="sub"></span>
@@ -469,7 +499,7 @@
         <button class="sq" id="ocollapse">collapse</button>
         <div class="rule"></div>
         <button class="sq" id="omore" title="size and speed">⋯</button>
-        <div class="sq slot"></div>
+        <button class="sq" id="ousage" title="tokens and API-equivalent dollars">usage</button>
       </div>
       <div class="pop hire" id="ohirepop" hidden>
         <label class="fld">name<input id="hname" maxlength="40" placeholder="Illustrator"></label>
@@ -496,6 +526,19 @@
       </div>
     </div>
     <div id="composer" hidden></div>
+    <div id="usage" hidden>
+      <div class="u-head">
+        <h2>Usage</h2>
+        <div class="u-tabs" id="utabs">
+          <button data-p="today">today</button>
+          <button data-p="7d">7 days</button>
+          <button data-p="30d">30 days</button>
+          <button data-p="all">all</button>
+        </div>
+        <button id="uclose" title="close (esc)">&times;</button>
+      </div>
+      <div class="u-body"><div class="u-inner" id="ubody"></div></div>
+    </div>
     <div class="foot" id="foot">
       <button id="collapse">collapse</button>
       <button id="view-map">map</button>
@@ -505,6 +548,7 @@
       <button id="new-sonnet" title="open a new session on Sonnet">+sonnet</button>
       <button id="new-haiku" title="open a new session on Haiku">+haiku</button>
       <button id="refresh">refresh</button>
+      <button id="usage-btn" title="tokens and API-equivalent dollars">usage</button>
       <span class="push" id="src"></span>
     </div>
   </div>
@@ -1177,6 +1221,73 @@
     say('err', 'board', 'started again from that session\'s latest state');
   };
 
+
+  // ---- usage panel ------------------------------------------------------
+  let usagePeriod = '7d';
+  try { usagePeriod = localStorage.getItem('usagePeriod') || '7d'; } catch { /* private window */ }
+  const PERIOD_LABEL = { today: 'today', '7d': 'in the last 7 days', '30d': 'in the last 30 days', all: 'all time' };
+
+  function fmtUsd(n) {
+    if (n > 0 && n < 0.01) return '<$0.01';
+    return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function usageRows(items, label) {
+    const max = Math.max(...items.map((x) => x.usd), 0) || 1;
+    return items.map((x) => {
+      const tip = `${label(x).plain} · ${fmtUsd(x.usd)} · ${fmtTokens(x.tokens)} tokens · ${x.turns} turns`
+        + (x.unpriced ? ` · ${fmtTokens(x.unpriced)} tokens on a model with no price` : '');
+      return `<div class="u-row" title="${esc(tip)}">
+        <span class="u-name">${label(x).html}</span>
+        <span class="u-track"><div class="u-bar" style="width:${(x.usd / max * 100).toFixed(1)}%"></div></span>
+        <span class="u-val">${fmtUsd(x.usd)}</span></div>`;
+    }).join('');
+  }
+
+  async function renderUsage() {
+    for (const b of el('utabs').querySelectorAll('button')) b.classList.toggle('on', b.dataset.p === usagePeriod);
+    const body = el('ubody');
+    if (!body.dataset.loaded) body.innerHTML = '<div class="u-note">counting every transcript, a couple of seconds the first time…</div>';
+    const asked = usagePeriod;
+    const r = await window.board.usageSummary(asked);
+    if (asked !== usagePeriod) return; // a newer tab click is already on its way
+    if (!r.ok) { body.innerHTML = `<div class="u-note">${esc(r.error || 'could not read usage')}</div>`; return; }
+    body.dataset.loaded = '1';
+    const t = r.total;
+    const plain = (s) => ({ plain: s, html: esc(s) });
+    body.innerHTML = `
+      <div class="u-hero">${fmtUsd(t.usd)}<small>${esc(PERIOD_LABEL[r.period])}</small></div>
+      <div class="u-stats">${fmtTokens(t.tokens)} tokens · ${t.turns.toLocaleString()} turns · ${r.sessionCount} sessions</div>
+      <div class="u-note">API-equivalent: what these tokens would cost at per-token API prices. A Pro or Max
+        subscription isn't billed this way, but it's the fair way to compare one session, model or project
+        with another. Each response is counted once, even where a forked session copied it.${t.unpriced
+          ? ` ${fmtTokens(t.unpriced)} tokens were on a model with no known price and aren't in the dollars.` : ''}</div>
+      ${t.turns ? `
+      <h3>By model</h3>${usageRows(r.byModel, (x) => plain(x.name.replace(/^claude-/, '').replace(/-\d{8}$/, '')))}
+      <h3>By project</h3>${usageRows(r.byProject.slice(0, 8), (x) => plain(x.name))}
+      <h3>Most expensive sessions</h3>${usageRows(r.bySession, (x) => ({
+        plain: `${x.title} (${x.project})`,
+        html: `${esc(x.title)}<small>${esc(x.project)}</small>`,
+      }))}` : '<div class="u-note">Nothing used in this period.</div>'}`;
+  }
+
+  function showUsage(on) {
+    el('usage').hidden = !on;
+    el('usage-btn').classList.toggle('on', on);
+    el('ousage').classList.toggle('on', on);
+    if (on) renderUsage();
+  }
+  el('usage-btn').onclick = () => showUsage(el('usage').hidden);
+  el('ousage').onclick = () => showUsage(el('usage').hidden);
+  el('uclose').onclick = () => showUsage(false);
+  el('utabs').onclick = (e) => {
+    const p = e.target.dataset && e.target.dataset.p;
+    if (!p) return;
+    usagePeriod = p;
+    try { localStorage.setItem('usagePeriod', p); } catch { /* private window */ }
+    renderUsage();
+  };
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !el('usage').hidden) showUsage(false); });
 
   toggleBtn('ogeo', (on) => window.Office.setOverlay(on));
   toggleBtn('oinvert', (on) => el('office').classList.toggle('blueprint', on));

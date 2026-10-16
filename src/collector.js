@@ -63,11 +63,11 @@ const usageCache = new Map();
 
 function scanUsage(file, size) {
   let u = usageCache.get(file);
-  if (!u) { u = { offset: 0, total: 0, context: null, carry: Buffer.alloc(0) }; usageCache.set(file, u); }
+  if (!u) { u = { offset: 0, total: 0, context: null, carry: Buffer.alloc(0), lastId: null }; usageCache.set(file, u); }
   // The file is shorter than last time: not an append, but a different file
   // at the same path (a session id is never reused, so this shouldn't happen
   // in practice, but a stale cursor reading past the real end would throw).
-  if (size < u.offset) { u.offset = 0; u.total = 0; u.context = null; u.carry = Buffer.alloc(0); }
+  if (size < u.offset) { u.offset = 0; u.total = 0; u.context = null; u.carry = Buffer.alloc(0); u.lastId = null; }
   if (size <= u.offset) return u;
 
   const start = u.offset;
@@ -95,6 +95,15 @@ function scanUsage(file, size) {
     if (e.type !== 'assistant') continue;
     const usage = (e.message || {}).usage;
     if (!usage) continue;
+    // One API response is written as one line per content block (thinking,
+    // text, each tool call), and every one of those lines carries the whole
+    // response's usage. Counting lines counted most turns two to five times:
+    // measured 2026-10-15, 168 usage lines for 70 responses in one session.
+    // The copies are always consecutive (0 exceptions in 11,784 lines across
+    // every transcript on this machine), so the previous id is enough.
+    const id = (e.message || {}).id;
+    if (id && id === u.lastId) continue;
+    u.lastId = id || null;
     const prompt = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
     // Every turn is its own billed API call, prompt and all, however much of
     // that prompt overlaps the turn before it: this is the sum Claude Code's

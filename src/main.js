@@ -7,6 +7,7 @@ function fsExists(p) {
 }
 const { execFile } = require('child_process');
 const { snapshot, digest, handoffBrief } = require('./collector');
+const { createUsage } = require('./usage');
 const demoFeed = require('./demo-feed');
 
 // A dev run is `electron .`, named after the package; the installed app is
@@ -1067,6 +1068,21 @@ ipcMain.handle('open-session-window', (_e, spec) => openSessionWindow(spec || {}
 // a fresh session in the same directory pointed at that note, and let the old
 // one be ended once the new one has its footing. Nothing here ends the old
 // session; that stays a separate, deliberate act.
+// Totals for the usage panel. Built on first open rather than at launch: the
+// first scan reads every transcript (~2s here), and someone who never opens
+// the panel shouldn't pay for it. After that a cache in userData means only
+// appended bytes are read, across restarts too.
+let usage = null;
+ipcMain.handle('usage-summary', (_e, period) => {
+  if (!usage) usage = createUsage(path.join(app.getPath('userData'), 'usage-cache.json'));
+  const ok = ['today', '7d', '30d', 'all'].includes(period) ? period : '7d';
+  try {
+    return { ok: true, ...usage.summary(ok) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 const HANDOFF_DIR = () => path.join(app.getPath('userData'), 'handoffs');
 
 function handoffMarkdown(title, b) {

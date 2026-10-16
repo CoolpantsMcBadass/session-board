@@ -438,3 +438,40 @@ v0.13.0 (2026-10-15): warn when a session's context gets expensive, and hand it 
   notes path, as "Application Support" has): each read the note, ran git
   status on its own, and gave an accurate summary of where the work stood.
   Warning visuals checked with the thresholds lowered in a test copy
+
+v0.14.0 (2026-10-15): a usage panel, and two counting bugs it exposed
+- new "usage" button (list/map footer, and the office strip's empty slot)
+  opens an overlay over whichever view is open: a headline API-equivalent
+  dollar total, tokens / turns / sessions, and bar lists by model, by project
+  and by most expensive session, for today / 7 days / 30 days / all
+- dollars are what the tokens would cost at per-token API prices (src/usage.js
+  PRICES, from the claude-api model reference cached 2026-10-06; cache writes
+  1.25x input for 5m, 2x for 1h, using each response's own TTL split). On a
+  subscription that isn't the bill, and the panel says so; it is the fair way
+  to compare sessions. The formula reproduces two costs the CLI reported
+  exactly ($0.0657692 Opus 5.5, $0.00076723 Haiku 5.5). Haiku 5.5's 5x rate
+  above 100K-token prompts is applied; Opus 5's cache-read rate isn't in the
+  reference, so it uses the standard 0.1x
+- bug 1, in the v0.10.0 per-session total: one API response is written once
+  per content block, every copy carrying the full usage, so totals counted
+  most turns 2-5 times (168 usage lines for 70 responses in one session).
+  Copies are always consecutive (0 exceptions in 11,784 lines machine-wide),
+  so scanUsage() now skips a repeat of the previous message id
+- bug 2, found building the panel: `--resume --fork-session` copies the
+  parent's whole history into the fork's transcript, message ids and usage
+  included. The board's old ask/chat forks carried 295-365 of their parent's
+  responses each; 800 ids appeared in more than one file. Counting per file,
+  all-time came to $954 and the board's own -p calls looked like over half of
+  it. Counting each id once (files scanned oldest first, so the parent keeps
+  its own responses) gives $489, with the board's -p calls at $41
+- projects are grouped by the commonest working cwd of each session's turns,
+  not its launch cwd: most sessions here start in ~ and cd into a project, so
+  launch cwd filed nearly everything under ~. Headless runs group together as
+  "board & scripts (claude -p)"
+- the first open scans every transcript (~4s for 364MB, blocks the main
+  process once); after that userData/usage-cache.json keeps per-file offsets
+  and the counted ids, so reopening reads only appended bytes (~0.1s), across
+  restarts too. Built on first open, not at launch
+- tested in the real app via playwright: cold open, tab switch, Esc to close,
+  reopen from the list footer, no page errors; screenshots checked at the
+  office width and the 390px list width
