@@ -217,6 +217,7 @@ function createWindow() {
     // The first poll usually resolves before this point, so replay it rather
     // than leaving the panel blank until something changes.
     if (lastSnapshot) win.webContents.send('snapshot', lastSnapshot);
+    sendLimits();
     // Dev aid: SB_TEST_ASK="<title substring>|<question>" fires one real ask
     // through the UI path, which is otherwise only reachable by clicking.
     if (process.env.SB_TEST_WIN) runWindowSelfTest();
@@ -441,6 +442,11 @@ app.whenReady().then(() => {
   createTray();
   poll();
   timer = setInterval(poll, POLL_MS);
+  // SB_NO_LIMITS keeps test copies from making a call of their own.
+  if (!process.env.SB_NO_LIMITS) {
+    setTimeout(probeLimits, 4000);
+    setInterval(probeLimits, LIMITS_EVERY_MS);
+  }
   globalShortcut.register('Command+Alt+S', () => setExpanded(!expanded));
   // Not Command+Alt+H: macOS owns that one for Hide Others, and a global
   // shortcut would quietly shadow it everywhere.
@@ -1068,6 +1074,65 @@ ipcMain.handle('open-session-window', (_e, spec) => openSessionWindow(spec || {}
 // a fresh session in the same directory pointed at that note, and let the old
 // one be ended once the new one has its footing. Nothing here ends the old
 // session; that stays a separate, deliberate act.
+// The plan's own usage limits: the same 5-hour and weekly percentages /usage
+// shows. Nothing publishes them as token counts, and no CLI command reports
+// them, but every API response carries them and `--output-format stream-json`
+// passes them through as a rate_limit_event (found 2026-10-15). So the board
+// asks: a tiny Haiku call, ~5K tokens, too small to move a 1% bar, every 15
+// minutes and whenever the strip is clicked. The figures are account-wide, so
+// any session's work shows up in them, not just the board's.
+const LIMITS_EVERY_MS = 15 * 60 * 1000;
+let limits = null;
+let limitsBusy = false;
+
+function sendLimits() {
+  if (win && !win.isDestroyed() && limits) win.webContents.send('limits', limits);
+}
+
+function readLimitEvent(info) {
+  const w = (info && info.unifiedWindows) || {};
+  const win5 = w.five_hour || {};
+  const win7 = w.seven_day || {};
+  if (win5.utilization == null && win7.utilization == null) return false;
+  limits = {
+    at: Date.now(),
+    status: info.status || null,
+    fiveHour: { used: win5.utilization, resetsAt: win5.resetsAt ? win5.resetsAt * 1000 : null },
+    weekly: { used: win7.utilization, resetsAt: win7.resetsAt ? win7.resetsAt * 1000 : null },
+  };
+  return true;
+}
+
+function probeLimits() {
+  return new Promise((resolve) => {
+    if (limitsBusy) { resolve(limits); return; }
+    limitsBusy = true;
+    runClaude([
+      '--model', 'haiku',
+      '--tools', 'Read',
+      '--strict-mcp-config',
+      '--mcp-config', '{"mcpServers":{}}',
+      '--output-format', 'stream-json',
+      '--verbose',
+      // Without this every probe leaves a transcript behind: ~96 files a day
+      // in ~/.claude/projects, each one more for the usage scan to read.
+      '--no-session-persistence',
+      '-p', 'Reply with just: ok',
+    ], { cwd: app.getPath('userData'), timeout: 60000, maxBuffer: 4 << 20 }, (err, stdout) => {
+      limitsBusy = false;
+      for (const line of (stdout || '').split('\n')) {
+        if (!line.includes('rate_limit_event')) continue;
+        try { if (readLimitEvent(JSON.parse(line).rate_limit_info)) break; } catch { /* partial line */ }
+      }
+      sendLimits();
+      resolve(limits);
+    });
+  });
+}
+
+ipcMain.handle('refresh-limits', () => probeLimits());
+ipcMain.handle('get-limits', () => limits);
+
 // Totals for the usage panel. Built on first open rather than at launch: the
 // first scan reads every transcript (~2s here), and someone who never opens
 // the panel shouldn't pay for it. After that a cache in userData means only

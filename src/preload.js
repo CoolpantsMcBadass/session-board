@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld('board', {
   openSessionWindow: (spec) => ipcRenderer.invoke('open-session-window', spec),
   handoff: (spec) => ipcRenderer.invoke('handoff', spec),
   usageSummary: (period) => ipcRenderer.invoke('usage-summary', period),
+  onLimits: (fn) => ipcRenderer.on('limits', (_e, l) => fn(l)),
+  refreshLimits: () => ipcRenderer.invoke('refresh-limits'),
   stow: () => ipcRenderer.invoke('stow'),
   setOnTop: (next) => ipcRenderer.invoke('set-on-top', next),
   quit: () => ipcRenderer.invoke('quit'),

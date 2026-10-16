@@ -88,6 +88,22 @@
     display: flex; align-items: baseline; gap: 8px;
     padding: 0 12px 9px; border-bottom: 1px solid var(--line);
   }
+  /* Plan usage strip. Two bars side by side when there's room, stacked in the
+     390px list. The fill is the usage panel's neutral bar colour until a
+     window gets close to its limit, where amber and red mean what they mean
+     everywhere else on the board; the percentage is always printed beside it,
+     so the colour is never the only signal. */
+  .limits { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 7px 12px;
+    border-bottom: 1px solid var(--line); cursor: pointer; font-size: 10.5px; color: var(--ink-dim); }
+  .limits:hover { background: var(--bg-row-hover); }
+  .lim { display: flex; align-items: center; gap: 7px; flex: 1 1 250px; min-width: 0; }
+  .lim .lbl { width: 42px; flex: none; }
+  .lim .trk { flex: 1; height: 6px; background: var(--bg-row); border-radius: 3px; overflow: hidden; min-width: 40px; }
+  .lim .fill { display: block; height: 100%; background: #7b8fd1; border-radius: 3px; }
+  .lim .fill.near { background: var(--waiting); }
+  .lim .fill.over { background: var(--blocked); }
+  .lim .pct { width: 30px; text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; flex: none; }
+  .lim .rst { width: 98px; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .head h1 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
   .head .sub { font-size: 11px; color: var(--ink-dim); margin-left: auto; }
   .list { flex: 1; overflow-y: auto; padding: 8px; }
@@ -455,6 +471,10 @@
       <h1>Sessions</h1>
       <span class="sub" id="sub"></span>
     </div>
+    <div class="limits" id="limits" hidden>
+      <div class="lim"><span class="lbl">5-hour</span><span class="trk"><span class="fill" id="l5fill"></span></span><span class="pct" id="l5pct"></span><span class="rst" id="l5rst"></span></div>
+      <div class="lim"><span class="lbl">weekly</span><span class="trk"><span class="fill" id="l7fill"></span></span><span class="pct" id="l7pct"></span><span class="rst" id="l7rst"></span></div>
+    </div>
     <div class="list" id="list"></div>
     <div id="map" hidden></div>
     <div id="office" hidden>
@@ -701,6 +721,10 @@
       ? `${missed} live session(s) the registry did not report, ${unmatched} process(es) with no transcript`
       : 'session source: ' + current.source;
     srcEl.style.color = (missed || unmatched) ? 'var(--waiting)' : '';
+    // Only shown when it has something to say: the footer ran out of room at
+    // 390px once usage joined it, and the plain source name ("registry") was
+    // the one item that told nobody anything.
+    srcEl.hidden = !(missed || unmatched);
     wire();
   }
 
@@ -1221,6 +1245,57 @@
     say('err', 'board', 'started again from that session\'s latest state');
   };
 
+
+  // ---- plan usage strip ------------------------------------------------
+  // The same two percentages /usage shows, read from the rate-limit event the
+  // API attaches to every response (main.js probeLimits). Account-wide: any
+  // session's work moves them.
+  let planLimits = null;
+
+  function resetText(ms) {
+    if (!ms) return '';
+    const d = new Date(ms);
+    // Within the day the minute matters; days away, the hour is plenty and
+    // the shorter form is what fits the 390px list.
+    if (ms - Date.now() < 20 * 3600 * 1000) {
+      return 'resets ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(':00', '');
+    }
+    return 'resets ' + d.toLocaleDateString([], { weekday: 'short' }) + ' '
+      + d.toLocaleTimeString([], { hour: 'numeric' });
+  }
+
+  function paintLimit(key, w) {
+    const used = w && w.used != null ? w.used : null;
+    const pct = used == null ? null : Math.round(used * 100);
+    const fill = el(key + 'fill');
+    fill.style.width = (pct == null ? 0 : Math.min(100, pct)) + '%';
+    fill.className = 'fill' + (pct >= 90 ? ' over' : pct >= 75 ? ' near' : '');
+    el(key + 'pct').textContent = pct == null ? '?' : pct + '%';
+    el(key + 'rst').textContent = resetText(w && w.resetsAt);
+  }
+
+  function paintLimits() {
+    if (!planLimits) return;
+    el('limits').hidden = false;
+    paintLimit('l5', planLimits.fiveHour);
+    paintLimit('l7', planLimits.weekly);
+    const mins = Math.round((Date.now() - planLimits.at) / 60000);
+    el('limits').title = `Pro plan usage limits, the same figures /usage shows. Checked ${
+      mins < 1 ? 'just now' : mins + ' min ago'}; updates every 15 min, click to check now.`
+      + (planLimits.status && planLimits.status !== 'allowed' ? ` Status: ${planLimits.status}.` : '');
+  }
+
+  window.board.onLimits((l) => { planLimits = l; paintLimits(); });
+  el('limits').onmouseenter = paintLimits; // keeps "checked N min ago" honest
+  el('limits').onclick = async () => {
+    el('limits').style.opacity = '.55';
+    const l = await window.board.refreshLimits();
+    el('limits').style.opacity = '';
+    if (l) { planLimits = l; paintLimits(); }
+  };
+  // Reset times are relative ("resets 4 pm" becomes a weekday once it's far
+  // off), so repaint now and then even with no new data.
+  setInterval(paintLimits, 60000);
 
   // ---- usage panel ------------------------------------------------------
   let usagePeriod = '7d';

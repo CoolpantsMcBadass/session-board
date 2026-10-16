@@ -475,3 +475,27 @@ v0.14.0 (2026-10-15): a usage panel, and two counting bugs it exposed
 - tested in the real app via playwright: cold open, tab switch, Esc to close,
   reopen from the list footer, no page errors; screenshots checked at the
   office width and the 390px list width
+
+v0.15.0 (2026-10-15): the plan's real usage limits, as bars under the header
+- a strip under the header, in every view (list, map, office): a 5-hour bar
+  and a weekly bar, each with its percentage and reset time. These are the
+  same figures Claude Code's /usage shows, not an estimate
+- where they come from: no CLI command reports them and Pro limits aren't
+  published as token counts, but every API response carries them, and
+  `claude -p --output-format stream-json --verbose` passes them through as a
+  rate_limit_event ({unifiedWindows: {five_hour, seven_day}: {utilization,
+  resetsAt}}). main.js probeLimits() makes a tiny Haiku call (~5K tokens,
+  too small to move a 1% bar) 4s after launch, every 15 minutes, and when the
+  strip is clicked. Account-wide, so every session's work shows in them
+- --no-session-persistence on the probe: without it each check leaves a
+  transcript, ~96 a day in ~/.claude/projects for every scan to read.
+  Verified: transcript count unchanged across a test run
+- bars use the usage panel's neutral colour, amber from 75%, red from 90%,
+  with the percentage always printed beside them. The tooltip says how long
+  ago it was checked. SB_NO_LIMITS turns the probe off for test copies
+- the list footer ran out of room at 390px with "usage" added; the source
+  label (normally just "registry") now only shows when it carries a warning
+- far-off resets read "Mon 10 PM" instead of with minutes, which is what fits
+- tested in the real app: real values appeared ~7s after launch (5-hour 7%,
+  weekly 5%), injected 95% / 80% painted red / amber, a click brought the
+  real values back (8%), screenshots checked at office and list widths
