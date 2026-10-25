@@ -769,8 +769,44 @@ ipcMain.handle('move-into-board', async (_e, sessionId) => {
   if (!(await host.list()).some((h) => h.name === res.name)) {
     return { ok: false, error: 'it closed in Terminal, but claude --resume ' + s.sessionId.slice(0, 8) + ' exited at once here' };
   }
+  // Ending claude leaves the shell it was started from at a prompt in the old
+  // Terminal tab, which would otherwise be left behind for every move. Kept on
+  // a failed move, where that shell is where you would retry.
+  if (TTY_RE.test(s.tty || '')) await closeShellTab(s.tty);
   return res;
 });
+
+// Types `exit` into the shell left in a tab. Only once the tab is not busy:
+// busy means something other than the shell has the terminal, and typing into
+// that would be typing into someone's program. Terminal can be set to keep a
+// window whose shell has exited ("[Process completed]"), so once the tab has
+// no processes left its window is closed too, which with nothing running never
+// asks. Not when the window holds other tabs: closing it would close those.
+async function closeShellTab(tty) {
+  for (let i = 0; i < 10; i++) {
+    const res = await osa(`tell application "Terminal"
+  repeat with w from 1 to count of windows
+    repeat with t from 1 to count of tabs of window w
+      if (tty of tab t of window w) is "${tty}" then
+        if busy of tab t of window w then return "busy"
+        set win to window w
+        set tb to tab t of window w
+        do script "exit" in tb
+        repeat 20 times
+          if (count of processes of tb) is 0 then exit repeat
+          delay 0.1
+        end repeat
+        if (count of processes of tb) is 0 and (count of tabs of win) is 1 then close win
+        return "ok"
+      end if
+    end repeat
+  end repeat
+  return "notfound"
+end tell`);
+    if (!res.ok || res.out !== 'busy') return;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
 
 function hasTranscript(sessionId) {
   const root = path.join(app.getPath('home'), '.claude', 'projects');

@@ -720,3 +720,16 @@ v0.15.0 (2026-10-15): the plan's real usage limits, as bars under the header
 - not changed: a session opened in ~ shows Claude Code's "trust this folder"
   screen, whose default is "No, exit". Enter there ends the session. That is
   the CLI's own gate and the board does not answer it for you
+
+2026-10-25  v0.19.5  a moved session's Terminal window closes
+
+- ending claude for a move left the shell it was started from at a prompt,
+  so every move left an empty Terminal window behind ("Resume this session
+  with: ..."). After a successful move the board types `exit` into that tab,
+  only once the tab is not busy (busy means a program other than the shell has
+  the terminal). Terminal here is set to keep a window whose shell exited
+  ("[Process completed]"), so once the tab has no processes left its window is
+  closed too, which never asks with nothing running. A window holding other
+  tabs is left open. On a failed move the shell is left alone, since that is
+  where you would retry
+- verified on a throwaway session in its own window: moved, docked, window gone
