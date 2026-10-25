@@ -7,12 +7,10 @@
 // whatever the user's default was, so making Opus the default quietly made
 // every ask cost ~36x what Haiku charges for the same answer (measured
 // 2026-10-15: $0.066 vs $0.0018). Ask and relay read an excerpt and summarise
-// it, which is Haiku's job; chat is a conversation someone is actually
-// steering, so it gets Sonnet unless the panel says otherwise.
+// it, which is Haiku's job.
 const JOBS = {
   consult: { model: 'haiku', effort: 'low' },
   relay:   { model: 'haiku', effort: 'low' },
-  chat:    { model: 'sonnet' },
 };
 
 // Each tool's definition rides in the prompt, and narrowing to the three
@@ -41,12 +39,11 @@ const SYSTEM_PROMPT = [
 // project that has them).
 const NO_MCP = ['--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}'];
 
-function jobArgs(job, { prompt, resumeId, model }) {
+function jobArgs(job, { prompt }) {
   const spec = JOBS[job];
   const args = [];
-  if (resumeId) args.push('--resume', resumeId);
   args.push(
-    '--model', model || spec.model,
+    '--model', spec.model,
     '--tools', JOB_TOOLS,
     '--system-prompt', SYSTEM_PROMPT,
     ...NO_MCP,

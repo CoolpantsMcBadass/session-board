@@ -44,7 +44,7 @@ const OFFICE_W = 1000;
 const OFFICE_H = 710;
 const MIN_W = 52;
 // The office cannot use the rail's minimum. Its row is a fixed 96px strip, a
-// chat that will not go below 200px, 28px of padding and two 12px gaps, which
+// docked terminal that will not go below 200px, 28px of padding and two 12px gaps, which
 // is 348px before the plan gets anything at all. A window narrower than that
 // leaves the plan with negative room and the strip's buttons off the edge with
 // nothing to scroll to reach them.
@@ -487,7 +487,7 @@ ipcMain.handle('reveal', (_e, session) => {
   if (session.cwd) shell.openPath(session.cwd);
 });
 
-// Sessions this app started itself. A consult, a relay or a chat message runs
+// Sessions this app started itself. A consult or a relay runs
 // claude --fork-session, and the registry reports that fork as an ordinary
 // interactive session, indistinguishable from one William opened in a terminal.
 // Left alone it turns up on the board as an extra ball and takes an office for
@@ -505,7 +505,7 @@ function runClaude(args, options, done) {
   // execFile leaves the child a stdin pipe nobody ever writes to, and claude
   // waits three seconds for input on it before giving up and warning about it
   // on stderr. Closing it immediately is what says "there is no input coming":
-  // every ask and every chat message was paying that three seconds, and the
+  // every ask and every relay was paying that three seconds, and the
   // warning was the only thing in stderr when a call failed for some other
   // reason, which made every failure look like a stdin problem.
   if (child.stdin) child.stdin.end();
@@ -514,18 +514,12 @@ function runClaude(args, options, done) {
 
 // Every call the board makes goes through here, so model choice, the tool list
 // and the cost record live in one place. json output is what carries back the
-// session id (chat needs it) and the usage block (the log needs it).
+// usage block the log needs.
 const USAGE_FILE = () => path.join(app.getPath('userData'), 'usage.jsonl');
-// total_cost_usd on a resumed session is the running total for that whole
-// conversation, not this call's share, so the second chat message would report
-// the first one's cost again on top of its own. Remember each conversation's
-// last total and charge each call only the difference.
-const lastTotalUsd = new Map();
 
-function runJob(job, { prompt, resumeId, cwd, model }, done) {
-  const spec = JOBS[job];
-  const useModel = model && MODEL_ALIASES.has(model) ? model : spec.model;
-  const args = jobArgs(job, { prompt, resumeId, model: useModel });
+function runJob(job, { prompt, cwd }, done) {
+  const useModel = JOBS[job].model;
+  const args = jobArgs(job, { prompt });
   const started = Date.now();
   runClaude(args, {
     cwd: cwd && fsExists(cwd) ? cwd : undefined,
@@ -544,12 +538,8 @@ function runJob(job, { prompt, resumeId, cwd, model }, done) {
       model: useModel,
       tokens: (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0)
         + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0),
-      usd: 0,
+      usd: parsed.total_cost_usd || 0,
     };
-    const total = parsed.total_cost_usd || 0;
-    const sid = parsed.session_id;
-    cost.usd = Math.max(0, total - ((resumeId && lastTotalUsd.get(resumeId)) || 0));
-    if (sid) lastTotalUsd.set(sid, total);
     // A log line is a convenience, never a reason to lose an answer.
     try {
       fs.mkdirSync(path.dirname(USAGE_FILE()), { recursive: true });
@@ -561,10 +551,9 @@ function runJob(job, { prompt, resumeId, cwd, model }, done) {
         output: u.output_tokens || 0,
         ms: Date.now() - started,
         promptChars: prompt.length,
-        resumed: !!resumeId,
       }) + '\n');
     } catch { /* unwritable log: carry on */ }
-    done({ ok: true, answer, sessionId: parsed.session_id || null, cost });
+    done({ ok: true, answer, cost });
   });
 }
 
@@ -603,37 +592,6 @@ ipcMain.handle('consult', (_e, { sessionId, cwd, question }) => {
       return;
     }
     runJob('consult', { prompt: withBrief(brief, question.trim()), cwd }, resolve);
-  });
-});
-
-// Chat is consult with a memory. The first message starts a fresh process
-// seeded with the same bounded excerpt consult uses; every reply carries that
-// conversation's own id back, and later messages resume it, so the panel holds
-// a conversation rather than a series of unrelated questions.
-//
-// It used to --resume --fork-session the real session, which replayed the whole
-// transcript (often 100K+ tokens) on the first message and resent it with every
-// follow-up. Resuming the small seeded conversation instead means a follow-up
-// costs what the chat itself has grown to, not what the lead's history has.
-//
-// What this is not: it never reaches the live session. The person at that
-// terminal sees nothing, and nothing typed here can make them act. The chat is
-// a separate process that read their recent history, and it stops learning at
-// the moment it started, which is why the panel can start a fresh one.
-ipcMain.handle('chat', (_e, { sessionId, forkId, cwd, message, model }) => {
-  return new Promise((resolve) => {
-    if (!message || !message.trim()) { resolve({ ok: false, error: 'nothing to say' }); return; }
-    if (!forkId && !sessionId) { resolve({ ok: false, error: 'no session to talk to' }); return; }
-    let prompt = message.trim();
-    if (!forkId) {
-      const brief = digest(sessionId, BRIEF_MAX_CHARS, BRIEF_MAX_TURNS);
-      if (!brief) { resolve({ ok: false, error: 'nothing readable in that session yet' }); return; }
-      prompt = withBrief(brief, prompt);
-    }
-    runJob('chat', { prompt, resumeId: forkId, cwd, model }, (res) => {
-      if (res.ok) res.forkId = res.sessionId || forkId;
-      resolve(res);
-    });
   });
 });
 
@@ -804,7 +762,7 @@ function holeBounds() {
 
 // Every dock change runs one after another. Each is an osascript of ~100ms,
 // and two at once (the first-session dock and a ball dropped a moment later,
-// or the chat button pressed mid-dock) would each see the other's half-done
+// or a swap while one is still moving) would each see the other's half-done
 // state: a window moved into the slot and never tracked, or the slot itself
 // recorded as where a window came from.
 let dockQueue = Promise.resolve();
@@ -1177,11 +1135,10 @@ ipcMain.handle('hide-sessions', async (_e, keepSessionId) => {
   // A session halted on a prompt must stay reachable. Hiding it would leave it
   // blocked for ever behind a window nobody can find.
   const blocked = live.filter((s) => s.state === 'blocked');
-  // The lead's window stays up. The chat talks to a fork of that session, not
-  // to the session itself, so hiding its terminal would take away the only
-  // place the lead can actually be told to do something.
+  // The window the caller names stays up, so a put away never takes the one
+  // session being worked with off screen.
   const kept = live.find((s) => s.sessionId === keepSessionId);
-  // The docked window is the one on screen by choice, the same as the lead.
+  // The docked window is the one on screen by choice.
   const hideable = live.filter((s) => s.state !== 'blocked' && s.sessionId !== keepSessionId
     && !(dock && s.tty === dock.tty));
   if (!hideable.length) return { ok: false, error: 'no terminal sessions to put away' };
@@ -1216,7 +1173,7 @@ ipcMain.handle('show-sessions', async () => {
   return { ok: true, out: changed + ' window(s) back' };
 });
 
-// What to show when a chat turn fails. Node's own message is the entire command
+// What to show when a board call fails. Node's own message is the entire command
 // line, which here is a resume flag, an inline mcp config and the whole prompt:
 // pages of noise with the reason buried at the end, if it is there at all. The
 // last line of stderr is almost always the real reason.

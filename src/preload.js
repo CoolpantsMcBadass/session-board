@@ -19,7 +19,6 @@ contextBridge.exposeInMainWorld('board', {
   copyResume: (s) => ipcRenderer.invoke('copy-resume', s),
   reveal: (s) => ipcRenderer.invoke('reveal', s),
   consult: (payload) => ipcRenderer.invoke('consult', payload),
-  chat: (payload) => ipcRenderer.invoke('chat', payload),
   relay: (payload) => ipcRenderer.invoke('relay', payload),
   loadBoard: () => ipcRenderer.invoke('load-board'),
   saveBoard: (b) => ipcRenderer.invoke('save-board', b),

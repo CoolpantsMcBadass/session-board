@@ -19,7 +19,7 @@
 
   // The docked terminal shares the row with the plan, and one squeezed to nothing is
   // worse than a slightly smaller plan, so the plan yields first.
-  const CHAT_MIN_W = 200;
+  const SLOT_MIN_W = 200;
 
   // The plan width the ball size is quoted at, which is roughly what the
   // default 1000x710 window gives it. A ball is a fixed size in the room, not
@@ -75,7 +75,7 @@
   // sits in. That box now shrinks to fit the plan, so measuring it would be
   // circular: the plan would be sized from a width that was itself the plan's.
   // Everything the plan does not get is accounted for here instead, the strip,
-  // the chat's minimum, the padding and both gaps.
+  // the docked terminal's minimum, the padding and both gaps.
   function fit() {
     if (!host) return;
     const cs = getComputedStyle(host);
@@ -85,11 +85,11 @@
     const ctlW = host.querySelector('.ctl').offsetWidth;
     // Clamped at zero rather than bailing out. Bailing left the plan frozen at
     // whatever size it last had, which is worse than wrong: .stage does not
-    // shrink, so the chat beside it absorbed the whole deficit, the opposite of
+    // shrink, so the slot beside it absorbed the whole deficit, the opposite of
     // the plan yielding first. At zero the plan simply disappears, which is
     // what letterboxing into no space should look like. The window's own
     // minimum width is what stops it being reachable in normal use.
-    const availW = Math.max(0, host.clientWidth - padX - (gap * 2) - ctlW - CHAT_MIN_W);
+    const availW = Math.max(0, host.clientWidth - padX - (gap * 2) - ctlW - SLOT_MIN_W);
     const availH = host.clientHeight - padY;
     if (availH <= 0) return;
     const scale = Math.min(availW / PLAN_W, availH / PLAN_H);

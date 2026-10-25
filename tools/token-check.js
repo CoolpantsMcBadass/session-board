@@ -6,14 +6,14 @@
 // calls, mostly Haiku, roughly $0.03 at API prices. Four parts:
 //
 //   1. Overhead: each job's fixed cost, measured on a one-word prompt. This is
-//      what every single ask/chat/relay pays before any excerpt is added.
+//      what every single ask/relay pays before any excerpt is added.
 //   2. Answers: each job answers a question whose answer is only in a made-up
 //      excerpt, so a trim that leaves calls cheap but useless fails here.
 //   3. Savings left: tries each further trim on top of the current flags and
 //      reports any that would still save a meaningful amount. New CLI
 //      versions add flags and prompt text; this is where that shows up.
 //   4. Real use: averages from the app's own usage log, so a job that has
-//      grown expensive in practice (big excerpts, long chats) is visible.
+//      grown expensive in practice (big excerpts) is visible.
 //
 // Exits non-zero when a budget or an answer check fails.
 const { execFileSync } = require('child_process');
@@ -49,7 +49,7 @@ function run(args) {
     usd: r.total_cost_usd || 0,
   };
 }
-// The test's own calls never need a transcript, except a chat it resumes.
+// The test's own calls never need a transcript.
 const once = (args) => run([...args.slice(0, -2), '--no-session-persistence', ...args.slice(-2)]);
 
 const EXCERPT = [
@@ -102,14 +102,6 @@ console.log('\n2. Answers still right');
   const r = once(jobArgs('consult', { prompt: 'Read notes.txt in this directory. What is the deploy target? One line.' }));
   spent += r.usd;
   /staging-west/.test(r.answer) ? pass('ask can still read live files with its tools') : fail('ask could not read a file: ' + r.answer.slice(0, 120));
-}
-{
-  const a = run(jobArgs('chat', { prompt: EXCERPT + '\n\nRemember the codeword "heron". In one sentence, what was fixed?' }));
-  const b = run(jobArgs('chat', { prompt: 'What codeword did I give you? Just the word.', resumeId: a.sessionId }));
-  spent += b.usd; // a resumed call reports the conversation's running total
-  /heron/i.test(b.answer) ? pass('chat remembers across messages') : fail('chat lost its memory on resume: ' + b.answer.slice(0, 120));
-  const growth = b.prompt - a.prompt;
-  console.log(`        second message cost ${b.prompt} prompt tokens (${growth >= 0 ? '+' : ''}${growth} over the first)`);
 }
 {
   const r = once(jobArgs('relay', { prompt: 'Another Claude Code session sent this.\n' + EXCERPT + '\n\nIn one sentence, does the change look risky?' }));

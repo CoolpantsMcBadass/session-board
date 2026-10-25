@@ -599,3 +599,15 @@ v0.15.0 (2026-10-15): the plan's real usage limits, as bars under the header
   board starts on the rail) and MAPRESET clicks the real button id; the dead
   SB_TEST_MAP is removed. Both rerun: TESTNODE tapped true; MAPRESET reports
   map 820x798, rail 58x83, reopened into the office
+
+2026-10-24  v0.17.2  the chat's backend goes too
+
+- removed with the panel it served: main.js's 'chat' handler, preload's chat,
+  jobs.js's chat job (Sonnet), and the resume plumbing only chat used
+  (--resume in jobArgs, the per-call model override, and the running-total
+  subtraction for total_cost_usd, which only a resumed call needed). Usage
+  log lines no longer carry `resumed`; old lines with it still read fine
+- token-check loses its "chat remembers across messages" test. Rerun: consult
+  and relay 3345 tokens, probe 1675, every answer check passes
+- comments and the office's min-width constant (now SLOT_MIN_W) describe the
+  docked terminal instead of the chat
