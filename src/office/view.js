@@ -82,14 +82,14 @@
     const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
     const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
     const gap = parseFloat(cs.columnGap) || 0;
-    const ctlW = host.querySelector('.ctl').offsetWidth;
+
     // Clamped at zero rather than bailing out. Bailing left the plan frozen at
     // whatever size it last had, which is worse than wrong: .stage does not
     // shrink, so the slot beside it absorbed the whole deficit, the opposite of
     // the plan yielding first. At zero the plan simply disappears, which is
     // what letterboxing into no space should look like. The window's own
     // minimum width is what stops it being reachable in normal use.
-    const availW = Math.max(0, host.clientWidth - padX - (gap * 2) - ctlW - SLOT_MIN_W);
+    const availW = Math.max(0, host.clientWidth - padX - gap - SLOT_MIN_W);
     const availH = host.clientHeight - padY;
     if (availH <= 0) return;
     const scale = Math.min(availW / PLAN_W, availH / PLAN_H);

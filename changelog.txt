@@ -611,3 +611,14 @@ v0.15.0 (2026-10-15): the plan's real usage limits, as bars under the header
   and relay 3345 tokens, probe 1675, every answer check passes
 - comments and the office's min-width constant (now SLOT_MIN_W) describe the
   docked terminal instead of the chat
+
+2026-10-24  v0.18.0  the office's button strip becomes a gear menu
+
+- the 96px strip down the office's right edge is gone. A gear in the top bar,
+  shown only in the office (the other views keep their footer), opens a menu:
+  list, + new session, put away, tile, refresh, usage, collapse. Each item
+  closes the menu; + new opens the hire form in the same corner
+- removed outright: geometry overlay, blueprint theme, meet at table, and the
+  ball size / walk speed sliders (balls keep their defaults, 27px and 0.27)
+- the docked terminal gets the strip's width; the office's minimum window
+  width drops from 440 to 340 to match

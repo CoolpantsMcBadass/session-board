@@ -43,16 +43,14 @@ const MAP_W = 820;
 const OFFICE_W = 1000;
 const OFFICE_H = 710;
 const MIN_W = 52;
-// The office cannot use the rail's minimum. Its row is a fixed 96px strip, a
-// docked terminal that will not go below 200px, 28px of padding and two 12px gaps, which
-// is 348px before the plan gets anything at all. A window narrower than that
-// leaves the plan with negative room and the strip's buttons off the edge with
-// nothing to scroll to reach them.
+// The office cannot use the rail's minimum. Its row is a docked terminal that
+// will not go below 200px, 28px of padding and one 12px gap, which is 240px
+// before the plan gets anything at all.
 //
-// 440 rather than the 364 where the arithmetic merely stops being negative,
+// 340 rather than the 256 where the arithmetic merely stops being negative,
 // because a plan 16px wide is not a plan. This leaves it about 90px, which is
 // small but still a floorplan.
-const OFFICE_MIN_W = 440;
+const OFFICE_MIN_W = 340;
 const MIN_H = 70;   // low enough that a one-dot rail keeps its natural height
 const MARGIN = 14;
 const POLL_MS = 2000;

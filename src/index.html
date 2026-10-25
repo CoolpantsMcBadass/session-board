@@ -306,14 +306,11 @@
 
   /* ---- office view ---- */
   /* The plan is black ink on transparency, and the panel is dark, so the floor
-     needs a light ground under it or the drawing simply is not there. The
-     blueprint class is the other way round: ink inverted to pale lines, no
-     ground, for when the office should sit in the dark panel rather than on
-     a sheet of paper. Which one wins is still an open question, hence both. */
+     needs a light ground under it or the drawing simply is not there. */
   /* A row, not a column: the plan is portrait inside a wide window, so it sits
-     against the left edge with a margin and the controls take a fixed strip on
-     the right. Centring the plan would leave a gutter on both sides and anchor
-     it to nothing. The space between the two is deliberate room to grow. */
+     against the left edge with a margin and the docked terminal takes the
+     rest. Centring the plan would leave a gutter on both sides and anchor it
+     to nothing. */
   #office { display: flex; flex-direction: row; align-items: stretch; gap: 12px;
             flex: 1; min-height: 0; padding: 10px 12px 14px 16px; position: relative; }
   #office[hidden] { display: none; }
@@ -383,38 +380,28 @@
                               border: 1px solid var(--line); border-radius: 3px;
                               font: inherit; font-size: 11px; padding: 2px 7px; cursor: pointer; }
   /* About an inch. Fixed, so the plan never trades size against the controls. */
-  #office .ctl { flex: 0 0 96px; width: 96px; display: flex; flex-direction: column;
-                 gap: 6px; font-size: 10px; color: var(--ink-dim); overflow-y: auto; }
-  #office .sq { height: 40px; border: 1px solid var(--line); border-radius: 4px;
-                background: var(--bg-row); color: var(--ink); font: inherit;
-                line-height: 1.15; padding: 2px; cursor: pointer; flex: 0 0 auto; }
-  #office .sq:hover { background: var(--bg-row-hover); }
-  /* Pressed state is the border, not the fill, so an active toggle still reads
-     as a control rather than as a filled-in block. */
-  #office .sq.on { border-color: var(--working); color: var(--working); }
-  #office .sq.slot { background: transparent; border-style: dashed; cursor: default; }
-  #office .sq.slot:hover { background: transparent; }
-  #office .sl { display: flex; flex-direction: column; gap: 3px; flex: 0 0 auto; }
-  #office .sl input[type=range] { width: 100%; margin: 0; }
-  /* Anchored beside the strip rather than inside it: .ctl scrolls, and a
-     scrolling box clips anything that tries to escape it sideways. */
-  #office .pop { position: absolute; right: 120px; width: 180px; z-index: 5;
+  .menu { position: absolute; right: 6px; top: 28px; z-index: 20; min-width: 150px;
+          display: flex; flex-direction: column; padding: 4px;
+          background: var(--bg-row); border: 1px solid var(--line); border-radius: 6px;
+          box-shadow: 0 6px 18px rgba(0,0,0,.5); }
+  .menu[hidden] { display: none; }
+  .menu button { text-align: left; background: none; border: 0; border-radius: 4px;
+                 color: var(--ink); font: inherit; font-size: 12px; padding: 6px 10px; cursor: pointer; }
+  .menu button:hover { background: var(--bg-row-hover); }
+  .menu button.on { color: var(--working); }
+  /* Under the top bar's gear, where the menu that opens it was. */
+  #office .pop { position: absolute; right: 6px; top: 0; width: 180px; z-index: 5;
                  display: flex; flex-direction: column; gap: 9px; font-size: 10px;
                  color: var(--ink-dim); background: var(--bg-row); padding: 9px;
                  border: 1px solid var(--line); border-radius: 4px;
                  box-shadow: 0 4px 14px rgba(0,0,0,.5); }
   #office .pop[hidden] { display: none; }
-  /* Separates the controls that belong to this view from the board-wide ones
-     below, which do the same thing here as they do in the footer. */
-  #office .rule { flex: 0 0 auto; height: 1px; background: var(--line); margin: 2px 0; }
   #office .floor { position: relative; flex: 0 0 auto; border-radius: 3px;
                    background: #e9e5dc; box-shadow: 0 2px 10px rgba(0,0,0,.45); }
   #office .plan { width: 100%; height: 100%; display: block; }
   #office .geo, #office .balls { position: absolute; inset: 0; }
   #office .geo { width: 100%; height: 100%; display: none; overflow: visible; }
   #office.show-geo .geo { display: block; }
-  #office.blueprint .floor { background: #10141c; }
-  #office.blueprint .plan { filter: invert(1); }
 
   .geo-office { fill: rgba(80,150,255,.10); stroke: rgba(80,150,255,.75); stroke-width: .003; }
   .geo-table  { fill: none; stroke: rgba(0,200,120,.8); stroke-width: .004; }
@@ -453,6 +440,9 @@
       <svg width="16" height="5" viewBox="0 0 16 5" fill="currentColor"><circle cx="2" cy="2.5" r="1.3"/><circle cx="8" cy="2.5" r="1.3"/><circle cx="14" cy="2.5" r="1.3"/></svg>
     </button>
     <div class="wctl" id="wctl" hidden>
+      <button id="gear" title="settings" hidden>
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="6" cy="6" r="2.1"/><path d="M6 1v1.6M6 9.4V11M1 6h1.6M9.4 6H11M2.5 2.5l1.1 1.1M8.4 8.4l1.1 1.1M2.5 9.5l1.1-1.1M8.4 3.6l1.1-1.1"/></svg>
+      </button>
       <button id="pin"></button>
       <button id="stow" title="hide to the menu bar (⌘⌥B)">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="8.3" width="8" height="1.4" rx=".7"/></svg>
@@ -461,6 +451,18 @@
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 3l6 6M9 3l-6 6"/></svg>
       </button>
     </div>
+  </div>
+
+  <!-- The office's board actions. The office has no footer, and a strip of
+       permanent buttons beside the plan was more surface than they earn. -->
+  <div class="menu" id="setmenu" hidden>
+    <button id="olist">list</button>
+    <button id="onew">+ new session</button>
+    <button id="ohide">put away</button>
+    <button id="otile">tile</button>
+    <button id="orefresh">refresh</button>
+    <button id="ousage" title="tokens and API-equivalent dollars">usage</button>
+    <button id="ocollapse">collapse</button>
   </div>
 
   <div class="rail" id="rail"></div>
@@ -501,21 +503,6 @@
           <div class="dock-empty" id="dockempty">drop a session here</div>
         </div>
       </div>
-      <div class="ctl">
-        <button class="sq" id="ogeo">geometry</button>
-        <button class="sq" id="oinvert">blueprint</button>
-        <button class="sq" id="omeet">meet at<br>table</button>
-        <div class="rule"></div>
-        <button class="sq" id="olist">list</button>
-        <button class="sq" id="otile">tile</button>
-        <button class="sq" id="ohide">put away</button>
-        <button class="sq" id="onew">+ new</button>
-        <button class="sq" id="orefresh">refresh</button>
-        <button class="sq" id="ocollapse">collapse</button>
-        <div class="rule"></div>
-        <button class="sq" id="omore" title="size and speed">⋯</button>
-        <button class="sq" id="ousage" title="tokens and API-equivalent dollars">usage</button>
-      </div>
       <div class="pop hire" id="ohirepop" hidden>
         <label class="fld">name<input id="hname" maxlength="40" placeholder="Illustrator"></label>
         <label class="fld">purpose<textarea id="hwhy" rows="4"
@@ -534,10 +521,6 @@
           <option value="haiku">haiku: quick, narrow jobs</option>
         </select></label>
         <div class="fld-row"><button id="hgo">hire</button><button id="hcancel">cancel</button></div>
-      </div>
-      <div class="pop" id="opop" hidden>
-        <label class="sl">ball size<input type="range" id="osize" min="6" max="34" value="27"></label>
-        <label class="sl">walk speed<input type="range" id="ospeed" min="2" max="60" value="27"></label>
       </div>
     </div>
     <div id="composer" hidden></div>
@@ -863,7 +846,9 @@
     // The office keeps an animation loop open, so it has to be told when it
     // stops being the visible view, not merely hidden behind a style.
     window.Office.setVisible(view === 'office' && expanded);
-    if (view !== 'office') { showMore(false); showHire(false); }
+    if (view !== 'office') { showMenu(false); showHire(false); }
+    // Only the office needs it: the other views keep their footer.
+    el('gear').hidden = view !== 'office';
     // An ask box only exists in the list. Left open while another view shows,
     // it held off every repaint there, freezing the map and the office.
     if (view !== 'list') openAsk = null;
@@ -1069,18 +1054,11 @@
     onDock: (sessionId) => { dockAuto = true; dockSession(sessionId); },
   });
 
-  // The controls are buttons now rather than checkboxes, so each one carries
-  // its own on/off state. Returning it keeps the label and the thing it
-  // controls from ever disagreeing.
-  function toggleBtn(id, apply) {
-    const b = el(id);
-    b.onclick = () => { apply(b.classList.toggle('on')); };
-  }
   // Leaving the office goes straight to list: it's the one other view with no
   // button of its own to toggle back off, reached only by leaving whichever
   // of map or office is open.
   el('olist').onclick = () => setView('list');
-  // The strip's board-wide buttons click the footer's, rather than carrying a
+  // The gear menu's board-wide items click the footer's, rather than carrying a
   // second copy of the logic. Everything those three do (tiling, refreshing,
   // collapsing) stays defined in exactly one place.
   for (const [from, to] of [['otile', 'tile'],
@@ -1370,19 +1348,14 @@
   };
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !el('usage').hidden) showUsage(false); });
 
-  toggleBtn('ogeo', (on) => window.Office.setOverlay(on));
-  toggleBtn('oinvert', (on) => el('office').classList.toggle('blueprint', on));
-  // Size and speed live behind the overflow rather than on the strip. They are
-  // set once and then left alone, and a narrow permanent surface is worth more
-  // to the things actually pressed.
-  function showMore(on) {
-    const pop = el('opop');
-    pop.hidden = !on;
-    el('omore').classList.toggle('on', on);
-    // Lined up with its own button, so it reads as belonging to it rather than
-    // appearing from nowhere.
-    if (on) pop.style.top = el('omore').offsetTop + 'px';
+  // The gear's menu. Every item closes it, the way a menu does; + new then
+  // opens its own form in the same corner.
+  function showMenu(on) {
+    el('setmenu').hidden = !on;
+    el('gear').classList.toggle('on', on);
   }
+  el('gear').onclick = (e) => { e.stopPropagation(); showMenu(el('setmenu').hidden); };
+  el('setmenu').addEventListener('click', () => showMenu(false));
   // Putting the terminals away is what makes the office stand in for them, so
   // the same button has to bring them back; a one-way hide would be a trap.
   // Only windows this app hid are brought back, so anything closed or
@@ -1438,8 +1411,6 @@
     el('ohirepop').hidden = !on;
     el('onew').classList.toggle('on', on);
     if (!on) return;
-    showMore(false);
-    el('ohirepop').style.top = el('onew').offsetTop + 'px';
     el('hmodel').value = 'sonnet';
     el('hname').focus();
   }
@@ -1461,29 +1432,17 @@
     if (res.ok) { el('hname').value = ''; el('hwhy').value = ''; }
   };
 
-  el('omore').onclick = (e) => { e.stopPropagation(); showMore(el('opop').hidden); };
   // Anywhere else dismisses it, which is what a popover is expected to do and
   // means it can never be left open over the plan.
   document.addEventListener('click', (e) => {
-    if (!el('opop').hidden && !el('opop').contains(e.target)) showMore(false);
+    if (!el('setmenu').hidden && !el('setmenu').contains(e.target)) showMenu(false);
     if (!el('ohirepop').hidden && !el('ohirepop').contains(e.target)) showHire(false);
   });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    showMore(false);
+    showMenu(false);
     showHire(false);
   });
-
-  el('osize').oninput = (e) => window.Office.setBallSize(Number(e.target.value));
-  // The slider is whole numbers; the movement layer wants floorplan heights
-  // per second, so 16 on the slider means crossing the plan in about six seconds.
-  el('ospeed').oninput = (e) => window.Office.setSpeed(Number(e.target.value) / 100);
-  el('omeet').onclick = () => {
-    const on = !window.OfficeAgents.isGathering();
-    window.Office.setGathering(on);
-    el('omeet').classList.toggle('on', on);
-    el('omeet').innerHTML = on ? 'back to<br>desks' : 'meet at<br>table';
-  };
 
   // Two stacked panes: the front one is filled while the board floats above
   // everything, hollow once it sits in the window order like anything else.
