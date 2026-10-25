@@ -733,3 +733,11 @@ v0.15.0 (2026-10-15): the plan's real usage limits, as bars under the header
   tabs is left open. On a failed move the shell is left alone, since that is
   where you would retry
 - verified on a throwaway session in its own window: moved, docked, window gone
+
+2026-10-25  v0.19.6  the office opens at 950x622
+
+- the office's default size is now 950x622 points, the size William settled on
+  (read back from window.json, which matched a measurement of his screenshot:
+  ~1290x844 of a 2000px-wide preview of a 1470pt screen). It was 1000x710.
+  A size you drag it to is still remembered over this; the default is what a
+  fresh install, or a new settings folder, opens at

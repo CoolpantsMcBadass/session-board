@@ -41,8 +41,8 @@ const MAP_W = 820;
 // The floorplan sits against the left edge and the space to its right is
 // deliberate: it is where the room to grow is, and a window sized tight to the
 // drawing would have to be resized before anything could go beside it.
-const OFFICE_W = 1000;
-const OFFICE_H = 710;
+const OFFICE_W = 950;
+const OFFICE_H = 622;   // William's own arrangement, measured 2026-10-25
 const MIN_W = 52;
 // The office cannot use the rail's minimum. Its row is a docked terminal that
 // will not go below 200px, 28px of padding and one 12px gap, which is 240px
