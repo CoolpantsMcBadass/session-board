@@ -622,3 +622,37 @@ v0.15.0 (2026-10-15): the plan's real usage limits, as bars under the header
   ball size / walk speed sliders (balls keep their defaults, 27px and 0.27)
 - the docked terminal gets the strip's width; the office's minimum window
   width drops from 440 to 340 to match
+
+2026-10-25  v0.19.0  the dock is a real terminal; sessions run in tmux
+
+- why: the v0.17 dock was a see-through hole over Terminal's own window, so it
+  was two objects. A file dragged from Finder landed on the board, not the
+  session (a drag sends no mousemove, so the board never stepped aside), and
+  the session had to be clicked first. No app can take in another app's
+  window, so the dock now hosts the session itself
+- src/host.js (new): sessions the board starts run in tmux on a server of its
+  own (-L session-board, so a personal tmux is never touched), via a login
+  shell that execs claude so PATH is a terminal's. The dock is xterm.js in the
+  page attached through node-pty to `tmux attach`. Swapping sessions replaces
+  the client; the session carries on. Quitting, crashing or reinstalling the
+  board leaves every hosted session running, mid-task included, and the next
+  launch reattaches. Tested: started a session, quit the board, tmux still
+  listed it, relaunched, the dock reattached to the same live session
+- tmux config written to userData: no status bar, no prefix (Ctrl+B reaches
+  claude), mouse on so the trackpad scrolls the history, drag copies through
+  pbcopy, extended keys, UTF-8 forced (a Finder-launched app has no LANG and
+  tmux would draw claude's interface as underscores). xterm keeps no scrollback
+  of its own so the two never fight over the wheel; Option+drag selects
+  natively; Shift+Enter sends Esc+Enter, claude's newline
+- + new, hire, hand off and reopening from the list start the session in tmux
+  and dock it immediately. Terminal.app stays as the fallback without tmux
+- a Terminal.app session's ball dropped on the dock offers "move into the
+  board": after a confirm, its claude is ended and the same conversation is
+  resumed in a hosted session (--resume, after the old pid is confirmed gone so
+  two copies never write one transcript). Refused while it is working
+- files dropped on the dock type their paths, backslash-escaped as Terminal
+  does; drops anywhere else are swallowed so the board never navigates to them
+- removed: the hole, click pass-through, the persistent JXA window mover, the
+  pulled-out watcher and the restore-on-quit, all specific to the old dock
+- packaging: node-pty, @xterm/xterm, @xterm/addon-fit as dependencies; node-pty
+  rebuilt for Electron and asarUnpack'd (its spawn-helper must be a real file)

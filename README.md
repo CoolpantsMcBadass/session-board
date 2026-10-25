@@ -222,20 +222,24 @@ the whole session instead of scrolling away as one turn), and a permission mode.
 footer's own `+opus` / `+sonnet` / `+haiku` still pick a model the plain way and are
 unaffected by any of this.
 
-The middle of the office is a dock: one session's own Terminal window, held in place
-beside the floorplan. When the office opens it takes the session that was opened first.
-Drop a ball on it, or click a ball or a session's box above it, to swap that session in;
-the one it replaces goes back to wherever its window was. The board cannot put another
-app's window inside its own, so the dock is a see-through hole with the Terminal window
-moved to sit exactly underneath, and clicks over the hole go straight through to it.
-Docking brings Terminal forward, since the hole shows whatever is directly under the
-board. The window follows the board as it moves, through one osascript kept open for
-the purpose (a fresh one per step was ~140ms and visibly trailed a drag). Drag the
-window out and leave it somewhere and the slot says it was pulled out; drop it back with
-its centre over the slot and it snaps in. Quitting puts a docked window back where it
-came from.
+The middle of the office is a dock: a real terminal, holding one session. Sessions
+the board starts (**+ new session** in the gear menu, a hire, a hand off, reopening one
+from the list) run in tmux, on a tmux server of the board's own, and the dock is xterm.js
+attached to one of them. When the office opens it shows the hosted session opened first;
+click a ball, or drop one on the dock, to swap. Because the sessions belong to tmux rather
+than to the board, quitting, crashing or reinstalling the board leaves them running,
+mid-task included, and the next launch attaches again.
 
-**put away** hides the Terminal window of every session but the docked one, so the office can
+Files dragged onto the dock type their paths, the way Terminal does, which is how claude
+is handed an image. The trackpad scrolls the session's history (tmux keeps it), a drag
+copies, Option+drag selects without tmux, and Shift+Enter is a newline.
+
+A session running in Terminal.app cannot come inside while it runs, so dropping its ball
+on the dock offers to move it: the claude in Terminal is ended and the same conversation
+continues in the board with `--resume`. It is refused while the session is mid-task.
+Needs tmux (`brew install tmux`); without it, new sessions open in Terminal as before.
+
+**put away** hides the Terminal window of every Terminal session, so the office can
 stand in for them without a wall of terminal windows behind it, and the same button
 brings them back. A session blocked on a permission or trust prompt is never put away:
 nothing outside that window can answer it, so hiding it would strand the session for

@@ -322,20 +322,12 @@
      be circular. */
   #office .stage { flex: 0 0 auto; display: flex; align-items: flex-start; }
   #office .chat-head { display: flex; gap: 6px; flex: 0 0 auto; }
-  #office .hole[hidden], #office .dock-empty[hidden] { display: none; }
-  /* The dock is a hole, not a picture: the panel stops painting its own
-     background, and the hole paints it back everywhere except over itself with
-     a shadow too big to have an edge. z-index -1 puts that shadow under the
-     rest of the panel's content, and isolation keeps it inside the panel's own
-     rounded clip. What shows through is the real Terminal window behind. */
-  .panel.holed { background: transparent; isolation: isolate; }
+  #office .term[hidden], #office .dock-empty[hidden] { display: none; }
   #office .dock { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-  /* The slot keeps its size whichever face is showing, so main.js always has
-     the rectangle a pulled-out window would be dropped back into. No z-index
-     of its own, so the hole's -1 still lands in the panel's stacking context. */
   #office .slot { flex: 1; min-height: 0; position: relative; }
-  #office .hole { position: absolute; inset: 0; z-index: -1;
-                  border-radius: 10px; box-shadow: 0 0 0 4000px var(--bg); }
+  /* The xterm sizes itself to this box, padding excluded. */
+  #office .term { position: absolute; inset: 0; padding: 6px 4px 4px 8px; background: #0d0f15;
+                  border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   #office .dock-empty { position: absolute; inset: 0; display: flex; align-items: center;
                         justify-content: center; text-align: center; padding: 12px;
                         border: 1px dashed var(--line); border-radius: 10px;
@@ -499,7 +491,7 @@
           <button id="dockhandoff" hidden title="context is large: start a fresh session from a summary of this one">hand off</button>
         </div>
         <div class="slot" id="slot">
-          <div class="hole" id="hole" hidden></div>
+          <div class="term" id="term" hidden></div>
           <div class="dock-empty" id="dockempty">drop a session here</div>
         </div>
       </div>
@@ -553,6 +545,11 @@
   <div class="toast" id="toast"></div>
 </div>
 
+<!-- The dock's terminal. Loaded from the app's own node_modules, which works
+     both from the project and from inside the packaged app's asar. -->
+<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+<script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+<script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
 <script src="canvas.js"></script>
 <script src="office/geometry.js"></script>
 <script src="office/routes.js"></script>
@@ -637,6 +634,7 @@
       sessionId: s.sessionId, title: s.title, model: aliasOf(s.model), slot: liveSlots(),
     });
     toast(res.ok ? res.out : res.error);
+    dockStarted(res);
   }
 
   function tokenLine(s) {
@@ -794,7 +792,7 @@
         if (!s) return;
         toast('opening ' + s.title + '…');
         window.board.openSessionWindow({ cwd: s.cwd, resumeId: s.sessionId, slot: liveSlots() })
-          .then((res) => toast(res.ok ? res.out : res.error));
+          .then((res) => { toast(res.ok ? res.out : res.error); dockStarted(res); });
       };
     }
   }
@@ -1032,7 +1030,7 @@
   function newSession(model) {
     toast(`opening a new ${model} session…`);
     window.board.openSessionWindow({ model, slot: liveSlots() })
-      .then((res) => toast(res.ok ? res.out : res.error));
+      .then((res) => { toast(res.ok ? res.out : res.error); dockStarted(res); });
   }
   el('new-opus').onclick = () => newSession('opus');
   el('new-sonnet').onclick = () => newSession('sonnet');
@@ -1066,117 +1064,136 @@
     el(from).onclick = () => el(to).click();
   }
 
-  // The dock: one session's own Terminal window, held in the office's middle
-  // slot. When the board opens, the slot takes the first session that was
-  // opened; dropping a ball on the slot, or clicking a ball or a box, swaps
-  // that one in.
-  // main.js moves the window, this side only decides which and keeps the hole
-  // reported. Not remembered across restarts: "the first session" is asked
-  // afresh each time the board opens.
-  let dockId = null;
-  // Cleared when a dock fails, so a window that cannot be found is not looked
-  // for again on every poll. A drop turns it back on.
+  // The dock: a terminal in the office's middle slot, attached to one session
+  // the board hosts in tmux (host.js). When the board opens it takes the hosted
+  // session opened first; clicking or dropping a ball swaps one in. A session
+  // running in Terminal.app cannot come inside while it runs, so dropping one
+  // offers to move its conversation into the board instead.
+  let dockName = null;     // tmux name of the session on screen
+  // Cleared when an attach fails, so a broken one is not retried every poll.
+  // Choosing a session by hand turns it back on.
   let dockAuto = true;
 
-  function dockable() { return current.sessions.filter((s) => s.pid && s.tty); }
+  // tmux keeps the history and does the scrolling (mouse mode), so xterm keeps
+  // none of its own: two scrollbacks would fight over the wheel.
+  const term = new Terminal({
+    fontFamily: 'Menlo, "SF Mono", monospace',
+    fontSize: 12,
+    cursorBlink: true,
+    scrollback: 0,
+    // Option+arrow moves by word in claude's input, as it does in Terminal.
+    macOptionIsMeta: true,
+    // Option+drag selects in the terminal itself, past tmux's mouse handling.
+    macOptionClickForcesSelection: true,
+    theme: { background: '#0d0f15', foreground: '#d7dae0', cursor: '#d7dae0' },
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(el('term'));
+  // Shift+Enter is a newline in claude's input but a plain Enter to a
+  // terminal; Esc+Enter is what claude reads as a newline.
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey) {
+      window.board.termInput('\x1b\r');
+      return false;
+    }
+    return true;
+  });
+  term.onData((d) => window.board.termInput(d));
+  term.onResize(({ cols, rows }) => window.board.termResize(cols, rows));
+  window.board.onTermData((d) => term.write(d));
+  // The client exits when its session does (claude quit, or the session was
+  // ended), and the slot moves on to the next one.
+  window.board.onTermExit((name) => {
+    if (name !== dockName) return;
+    dockName = null;
+    syncDock();
+  });
 
-  function firstOpened() {
-    return dockable().slice()
-      .sort((a, b) => (a.startedAt || Infinity) - (b.startedAt || Infinity))[0] || null;
+  function slotShown() { return expanded && view === 'office'; }
+
+  function refit() {
+    if (!dockName || !slotShown()) return;
+    try { fit.fit(); } catch { /* not laid out yet */ }
+  }
+  new ResizeObserver(refit).observe(el('slot'));
+
+  function firstHosted() {
+    return (current.hosted || []).slice().sort((a, b) => a.created - b.created)[0] || null;
   }
 
-  // Set by main.js when the docked window has been dragged out of the slot and
-  // left somewhere else. The slot then shows the board again instead of a hole
-  // onto whatever is behind it, until the window is dropped back.
-  let dockOut = false;
-  window.board.onDockOut((out) => { dockOut = !!out; paintDock(); });
-
-  function slotShown() { return expanded && view === 'office' && !!dockId; }
-  function holeShown() { return slotShown() && !dockOut; }
-
-  async function dockSession(sessionId) {
-    const s = dockable().find((x) => x.sessionId === sessionId);
-    if (!s) { toast('that session has no Terminal window to dock'); return; }
-    if (sessionId === dockId && !dockOut) return;
-    // Set before the call, so the poll does not start a second dock while this
-    // one is still moving the window, and so the hole is on screen and
-    // reported by the time main.js goes to measure it.
-    dockId = sessionId;
+  async function attachTo(name) {
+    if (!name || name === dockName) return;
+    dockName = name;
     paintDock();
-    const res = await window.board.dockSession(s.tty);
+    refit();
+    term.reset();
+    const res = await window.board.termAttach({ name, cols: term.cols, rows: term.rows });
     if (!res.ok) {
       toast(res.error);
-      if (dockId === sessionId) dockId = null;
-      dockAuto = false;   // a window that cannot be found will not be found next poll either
+      if (dockName === name) dockName = null;
+      dockAuto = false;
       paintDock();
+      return;
     }
+    if (slotShown()) term.focus();
+  }
+
+  async function dockSession(sessionId) {
+    const s = current.sessions.find((x) => x.sessionId === sessionId);
+    if (!s || !s.pid) { toast('that session is not running'); return; }
+    dockAuto = true;
+    if (s.hosted) { attachTo(s.hosted); return; }
+    const res = await window.board.moveIntoBoard(sessionId);
+    if (!res.ok) { if (res.error !== 'cancelled') toast(res.error); return; }
+    attachTo(res.name);
+  }
+
+  // A session the board just started is docked straight away, before any poll
+  // has seen it.
+  function dockStarted(res) {
+    if (res && res.ok && res.name) { dockAuto = true; attachTo(res.name); }
   }
 
   function syncDock() {
-    if (dockId && !dockable().some((s) => s.sessionId === dockId)) {
-      // The session ended. Its window is closing on its own, so nothing to put back.
-      dockId = null;
-      window.board.undock(false);
-    }
-    // Only fills while the slot is actually on screen: docking moves a window
-    // and brings Terminal forward, which is not something to do to someone
-    // reading the list.
-    if (!dockId && dockAuto && expanded && view === 'office') {
-      const first = firstOpened();
-      if (first) { dockSession(first.sessionId); return; }
+    if (!dockName && dockAuto) {
+      const first = firstHosted();
+      if (first) { attachTo(first.name); return; }
     }
     paintDock();
   }
 
   function paintDock() {
-    el('hole').hidden = !dockId || dockOut;
-    el('dockempty').hidden = !!dockId && !dockOut;
-    el('dockempty').textContent = dockId
-      ? 'pulled out · drag its window back here, or click its ball'
-      : 'drop a session here';
-    document.querySelector('.panel').classList.toggle('holed', holeShown());
-    reportHole();
+    el('term').hidden = !dockName;
+    el('dockempty').hidden = !!dockName;
+    el('dockempty').textContent = 'start a session from the gear menu, or drop a ball here';
+    if (dockName && slotShown()) requestAnimationFrame(refit);
   }
 
-  // main.js places the window from this rectangle, so it is resent whenever it
-  // could have changed, and only when it did.
-  let lastHole = '';
-  function reportHole() {
-    let rect = null;
-    if (slotShown()) {
-      const r = el('slot').getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) rect = { x: r.left, y: r.top, width: r.width, height: r.height };
-    }
-    const key = JSON.stringify(rect);
-    if (!holeShown()) setPass(false);
-    if (key === lastHole) return;
-    lastHole = key;
-    window.board.dockHole(rect);
-  }
-  new ResizeObserver(reportHole).observe(el('slot'));
-  window.addEventListener('resize', reportHole);
-
-  // Clicks over the hole belong to the terminal, everywhere else to the board.
-  // Decided by what is on top at the pointer, not just by the rectangle, so a
-  // popover or toast lying over the hole keeps its own clicks. The hole sits at
-  // z-index -1, so on an uncovered spot the topmost box is the dock itself.
-  // Never mid-drag: a ball being carried over the slot must stay ours.
-  let passing = false;
-  function setPass(on) {
-    if (on === passing) return;
-    passing = on;
-    window.board.dockPass(on);
-  }
-  document.addEventListener('mousemove', (e) => {
-    if (!holeShown() || e.buttons || window.Office.dragging()) { setPass(false); return; }
-    const r = el('slot').getBoundingClientRect();
-    const inside = e.clientX >= r.left && e.clientX < r.right && e.clientY >= r.top && e.clientY < r.bottom;
-    const top = inside ? document.elementFromPoint(e.clientX, e.clientY) : null;
-    setPass(inside && (top === el('slot') || top === el('hole') || top === el('dock')));
+  // Files dropped on the terminal type their paths, quoted the way Terminal
+  // does it, which is how claude is handed an image or a file to read.
+  function shellEscape(p) { return p.replace(/([^A-Za-z0-9_\-.,:\/@+=])/g, '\\$1'); }
+  el('slot').addEventListener('dragover', (e) => {
+    if (!e.dataTransfer || ![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
   });
+  el('slot').addEventListener('drop', (e) => {
+    const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
+    if (!files.length) return;
+    e.preventDefault();
+    if (!dockName) { toast('no session in the dock'); return; }
+    const paths = files.map((f) => window.board.pathForFile(f)).filter(Boolean);
+    if (paths.length) window.board.termInput(paths.map(shellEscape).join(' ') + ' ');
+    term.focus();
+  });
+  // Anywhere else, a dropped file must not navigate the board away to it,
+  // which is what a browser window does with a file it is handed.
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', (e) => e.preventDefault());
 
   function docked() {
-    return current.sessions.find((s) => s.pid && s.sessionId === dockId) || null;
+    return current.sessions.find((s) => s.pid && s.hosted && s.hosted === dockName) || null;
   }
 
   // The slot's bar names the docked session, and above it a box for every
@@ -1429,6 +1446,7 @@
       model: el('hmodel').value,
     });
     toast(res.ok ? res.out : res.error);
+    dockStarted(res);
     if (res.ok) { el('hname').value = ''; el('hwhy').value = ''; }
   };
 

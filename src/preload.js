@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('board', {
   onSnapshot: (fn) => ipcRenderer.on('snapshot', (_e, data) => fn(data)),
@@ -25,11 +25,16 @@ contextBridge.exposeInMainWorld('board', {
   setView: (name) => ipcRenderer.invoke('set-view', name),
   copyPeer: (name) => ipcRenderer.invoke('copy-peer', name),
   focusSession: (tty) => ipcRenderer.invoke('focus-session', tty),
-  dockSession: (tty) => ipcRenderer.invoke('dock-session', tty),
-  undock: (restore) => ipcRenderer.invoke('undock', restore),
-  dockHole: (rect) => ipcRenderer.send('dock-hole', rect),
-  dockPass: (on) => ipcRenderer.send('dock-pass', on),
-  onDockOut: (fn) => ipcRenderer.on('dock-out', (_e, out) => fn(out)),
+  termAttach: (spec) => ipcRenderer.invoke('term-attach', spec),
+  termInput: (data) => ipcRenderer.send('term-input', data),
+  termResize: (cols, rows) => ipcRenderer.send('term-resize', { cols, rows }),
+  termDetach: () => ipcRenderer.invoke('term-detach'),
+  onTermData: (fn) => ipcRenderer.on('term-data', (_e, d) => fn(d)),
+  onTermExit: (fn) => ipcRenderer.on('term-exit', (_e, name) => fn(name)),
+  moveIntoBoard: (sessionId) => ipcRenderer.invoke('move-into-board', sessionId),
+  // A dropped File no longer carries .path under context isolation; this is
+  // the supported way to ask where it lives on disk.
+  pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
   endSession: (p) => ipcRenderer.invoke('end-session', p),
   tileWindows: (ttys) => ipcRenderer.invoke('tile-windows', ttys),
   hideSessions: (keepSessionId) => ipcRenderer.invoke('hide-sessions', keepSessionId),
