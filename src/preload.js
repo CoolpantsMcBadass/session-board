@@ -9,7 +9,6 @@ contextBridge.exposeInMainWorld('board', {
   onTestClick: (fn) => ipcRenderer.on('testclick', (_e, id) => fn(id)),
   onTestFocus: (fn) => ipcRenderer.on('testfocus', (_e, tty) => fn(tty)),
   onTestGrip: (fn) => ipcRenderer.on('testgrip', (_e, spec) => fn(spec || {})),
-  onTestMap: (fn) => ipcRenderer.on('testmap', (_e, q) => fn(q)),
   onTestTrash: (fn) => ipcRenderer.on('testtrash', (_e, m) => fn(m)),
   onAutoAsk: (fn) => ipcRenderer.on('autoask', (_e, p) => fn(p)),
   onError: (fn) => ipcRenderer.on('error', (_e, m) => fn(m)),

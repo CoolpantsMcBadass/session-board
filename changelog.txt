@@ -575,3 +575,27 @@ v0.15.0 (2026-10-15): the plan's real usage limits, as bars under the header
 - measured with a scripted 40-step drag (8px per 16ms): the terminal held its
   offset from the board on 33 of 40 samples, at most ~5 steps behind on the
   rest, and settled exactly
+
+2026-10-24  v0.17.1  fixes from a Haiku review of v0.16.0
+
+- collector: a session the registry reports busy is working, full stop. The
+  transcript check ran first, and since a response is written one line per
+  content block with text before its tool call, a busy session's newest line
+  is often text: it flickered to "waiting on you" mid-turn
+- collector: a transcript line that is valid JSON but not an object (a bare
+  `null`) threw in scanUsage outside any try and failed the whole poll.
+  Checked: a file with a null line now scans and counts the rest
+- process scan (only matters when the registry misses a session): `claude
+  "some prompt"` was dropped as a subcommand, now only claude --help's
+  subcommands plus the plumbing are; Chrome/Helper/Electron is tested on the
+  binary path, not the whole command, so `--name "Helper triage"` survives;
+  `-p`/`--print` runs are dropped instead of becoming unmatched pids
+- an ask box left open in the list froze the map and the office (both skip
+  repainting while one is open); leaving the list now closes it
+- the office's animation loop no longer runs while the board is collapsed
+- map: a drag or link that loses its pointer without a pointerup (pointercancel,
+  lost capture) is ended instead of holding off every map repaint
+- test switches: SB_TEST_NODE and SB_TEST_MAPRESET open the panel first (the
+  board starts on the rail) and MAPRESET clicks the real button id; the dead
+  SB_TEST_MAP is removed. Both rerun: TESTNODE tapped true; MAPRESET reports
+  map 820x798, rail 58x83, reopened into the office

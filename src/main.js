@@ -229,7 +229,6 @@ function createWindow() {
     if (process.env.SB_TEST_NEW) setTimeout(() => win.webContents.send('testclick', 'new-sonnet'), 1500);
     if (process.env.SB_TEST_TILE) setTimeout(() => win.webContents.send('testclick', 'tile'), 1500);
     if (process.env.SB_TEST_FOCUS) setTimeout(() => win.webContents.send('testfocus', process.env.SB_TEST_FOCUS), 1500);
-    if (process.env.SB_TEST_MAP) win.webContents.send('testmap', process.env.SB_TEST_MAP);
     if (process.env.SB_TEST_TRASH) setTimeout(() => win.webContents.send('testtrash', process.env.SB_TEST_TRASH), 1500);
     if (process.env.SB_TEST_ASK) {
       const [match, ...rest] = process.env.SB_TEST_ASK.split('|');
@@ -379,7 +378,14 @@ function runMapResetTest() {
     console.log(`TESTRESET ${label}: ${b.width}x${b.height} mode=${modeKey()}`);
   };
   const grip = () => win.webContents.send('testgrip', { target: 'dots', taps: 1 });
-  setTimeout(() => { win.webContents.send('testclick', 'view'); }, 1200);   // open the map
+  // The board opens on the rail now, where the map button is not on screen.
+  setTimeout(() => {
+    setExpanded(true);
+    view = 'list';
+    applyBounds();
+    win.webContents.send('expanded', true, view);
+  }, 600);
+  setTimeout(() => { win.webContents.send('testclick', 'view-map'); }, 1200);   // open the map
   setTimeout(() => { log('map open'); grip(); }, 2600);                     // collapse
   setTimeout(() => { log('collapsed'); grip(); }, 3800);                    // reopen
   setTimeout(() => { log('reopened'); }, 5000);

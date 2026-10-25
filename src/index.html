@@ -862,8 +862,11 @@
     el('composer').hidden = true;
     // The office keeps an animation loop open, so it has to be told when it
     // stops being the visible view, not merely hidden behind a style.
-    window.Office.setVisible(view === 'office');
+    window.Office.setVisible(view === 'office' && expanded);
     if (view !== 'office') { showMore(false); showHire(false); }
+    // An ask box only exists in the list. Left open while another view shows,
+    // it held off every repaint there, freezing the map and the office.
+    if (view !== 'list') openAsk = null;
     paintDock();
     // The office carries the board's own actions in its side strip, so the
     // footer would be a second copy of the same five buttons. It stays in the
@@ -934,11 +937,14 @@
   });
   window.board.onTestNode((spec) => {
     const [match, times] = spec.split('|');
-    setView('map');
-    setTimeout(() => {
-      const ok = window.Canvas.simulateNodeTap(match, Number(times) || 1);
-      console.log('TESTNODE tapped ' + match + ' x' + (times || 1) + ': ' + ok);
-    }, 800);
+    // Same as SB_TEST_TRASH: the rail has no map, so open the panel first.
+    window.board.toggle(true).then(() => {
+      setTimeout(() => setView('map'), 400);
+      setTimeout(() => {
+        const ok = window.Canvas.simulateNodeTap(match, Number(times) || 1);
+        console.log('TESTNODE tapped ' + match + ' x' + (times || 1) + ': ' + ok);
+      }, 1200);
+    });
   });
   window.board.onTestTrash((match) => {
     // The board starts on the rail, where there is no map and so no bin to

@@ -369,6 +369,19 @@
         node.classList.toggle('doomed', overBin);
         drawWiresOnly();
       };
+      // The browser can take the pointer away without a pointerup (a system
+      // gesture, the window losing focus mid-drag). Left alone, dragging stays
+      // set and busy() holds off every map repaint until the next press.
+      node.onpointercancel = () => {
+        if (!dragging) return;
+        const p = board.positions[dragging.id];
+        if (p) { p.x = dragging.from.x; p.y = dragging.from.y; }
+        dragging = null;
+        overBin = false;
+        paintBin();
+        render();
+      };
+      node.onlostpointercapture = () => { if (dragging) node.onpointercancel(); };
       node.onpointerup = () => {
         if (!dragging) return;
         const id = dragging.id;
@@ -412,6 +425,11 @@
       drawWiresOnly();
     };
 
+    host.onpointercancel = () => {
+      if (!linking) return;
+      linking = null;
+      drawWiresOnly();
+    };
     host.onpointerup = (ev) => {
       if (!linking) return;
       const target = document.elementFromPoint(ev.clientX, ev.clientY);

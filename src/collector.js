@@ -92,7 +92,9 @@ function scanUsage(file, size) {
     if (!line.trim()) continue;
     let e;
     try { e = JSON.parse(line); } catch { continue; }
-    if (e.type !== 'assistant') continue;
+    // A line can be valid JSON and still not an object: a bare `null` used to
+    // throw here, outside any try, and fail the whole poll rather than one row.
+    if (!e || e.type !== 'assistant') continue;
     const usage = (e.message || {}).usage;
     if (!usage) continue;
     // One API response is written as one line per content block (thinking,
@@ -162,15 +164,25 @@ async function livePids() {
     const parts = command.split(/\s+/);
     const bin = parts[0];
     if (!/(^|\/)claude$/.test(bin)) continue;
-    if (/Chrome|Helper|Electron/i.test(command)) continue;
+    // Tested on the binary's path only: on the whole command line it also
+    // dropped a real session named, say, "Helper triage".
+    if (/Chrome|Helper|Electron/i.test(bin)) continue;
     // `claude daemon run`, `claude bg-pty-host`, `claude bg-spare` are the
-    // background plumbing, not sessions. A session is bare `claude` or
-    // `claude -flags`; a bare word in first position is always a subcommand.
-    if (parts[1] && !parts[1].startsWith('-')) continue;
+    // background plumbing, and the rest are one-shot commands, not sessions.
+    // Any other bare word is a prompt, `claude "fix the login bug"`, which is
+    // a session like any other. The list is `claude --help`'s, plus plumbing.
+    if (parts[1] && !parts[1].startsWith('-') && SUBCOMMANDS.has(parts[1])) continue;
+    // Headless runs (this app's own asks among them) are not sessions either.
+    if (parts.includes('-p') || parts.includes('--print')) continue;
     pids.push({ pid: Number(pid), etime, uptimeSec: parseEtime(etime) });
   }
   return pids;
 }
+
+const SUBCOMMANDS = new Set(['daemon', 'bg-pty-host', 'bg-spare', 'agents', 'attach', 'auth',
+  'auto-mode', 'doctor', 'gateway', 'import', 'install', 'logs', 'mcp', 'plugin', 'plugins',
+  'purge', 'respawn', 'rm', 'setup-token', 'stop', 'kill', 'ultrareview', 'update', 'upgrade',
+  'config', 'migrate-installer']);
 
 function parseEtime(etime) {
   // [[dd-]hh:]mm:ss
@@ -578,8 +590,12 @@ async function snapshot(opts = {}) {
     // The registry's own view of a finished turn beats inferring it from the
     // transcript, and it is right even before anything is written to disk.
     else if (s.reported === 'idle') s.state = age > PARK_MS ? 'parked' : 'waiting';
-    else if (s.turn && s.turn.done) s.state = age > PARK_MS ? 'parked' : 'waiting';
+    // Busy beats the transcript. A response is written one line per content
+    // block, text before the tool call that follows it, so mid-turn the newest
+    // line is often text and the turn reads as finished: a session streaming a
+    // long Write flickered to "waiting on you".
     else if (s.reported === 'busy') s.state = 'working';
+    else if (s.turn && s.turn.done) s.state = age > PARK_MS ? 'parked' : 'waiting';
     else if (age > STALL_MS) s.state = 'stalled';
     else s.state = 'working';
     s.idleSec = Math.round(age / 1000);
