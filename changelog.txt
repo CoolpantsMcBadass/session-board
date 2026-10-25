@@ -656,3 +656,17 @@ v0.15.0 (2026-10-15): the plan's real usage limits, as bars under the header
   pulled-out watcher and the restore-on-quit, all specific to the old dock
 - packaging: node-pty, @xterm/xterm, @xterm/addon-fit as dependencies; node-pty
   rebuilt for Electron and asarUnpack'd (its spawn-helper must be a real file)
+
+2026-10-25  v0.19.1  hosted sessions no longer inherit the board's own switches
+
+- host.js handed tmux the board's whole environment. The tmux server keeps
+  what its first client gives it and every session inherits that, so a test
+  copy run with SB_TEST_NEW / SB_TEST_OFFICE / SB_USERDATA put them into every
+  hosted session. A session moved into the board then launched the installed
+  app with them on: it started a new Sonnet session on every launch, and used
+  the test's settings folder. Found by reproducing (quit, open, count tmux
+  sessions: 3 -> 4 with no input) and reading the app's environment with
+  ps eww. Fix: SB_* and ELECTRON_* are stripped before anything reaches tmux.
+  The running server's copies were cleared with set-environment -g -u, and
+  the two empty sessions it started were ended. Verified: relaunched app has
+  no SB_ variables, starts nothing, and docks the oldest hosted session

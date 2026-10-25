@@ -60,8 +60,18 @@ function init(userDataDir) {
 
 // A Finder-launched app gets a bare environment: no LANG makes tmux draw every
 // non-ASCII character as an underscore, which is most of claude's interface.
+//
+// The board's own switches are stripped. The tmux server inherits whatever the
+// first client hands it, and every session inherits the server's, so a test
+// copy run with SB_TEST_NEW leaked it into hosted sessions, and a session that
+// then launched the installed board launched it with the test switches on: it
+// opened a new session every time it started, using the test's settings folder.
 function env() {
-  const e = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+  const e = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (!/^(SB_|ELECTRON_)/.test(k)) e[k] = v;
+  }
+  Object.assign(e, { TERM: 'xterm-256color', COLORTERM: 'truecolor' });
   if (!/UTF-8/i.test(e.LANG || '')) e.LANG = 'en_US.UTF-8';
   return e;
 }
