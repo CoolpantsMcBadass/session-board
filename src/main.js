@@ -5,7 +5,7 @@ const fs = require('fs');
 function fsExists(p) {
   try { return fs.statSync(p).isDirectory(); } catch { return false; }
 }
-const { execFile } = require('child_process');
+const { execFile, execFileSync, spawn } = require('child_process');
 const { snapshot, digest, handoffBrief } = require('./collector');
 const { createUsage } = require('./usage');
 const { JOBS, jobArgs, probeArgs } = require('./jobs');
@@ -182,6 +182,12 @@ function createWindow() {
     clearTimeout(sizeTimer);
     sizeTimer = setTimeout(saveSizes, 400);
   });
+
+  // A docked terminal is a separate window sitting under the slot, so it has
+  // to be told every time the slot moves on screen.
+  win.on('move', () => snapDock());
+  win.on('show', () => snapDock());
+  win.on('resize', () => snapDock());
 
   win.setAlwaysOnTop(onTop, 'floating');
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -702,6 +708,7 @@ ipcMain.on('win-move-by', (_e, { dx, dy }) => {
   const x = Math.max(wa.x - b.width + 40, Math.min(b.x + dx, wa.x + wa.width - 40));
   const y = Math.max(wa.y, Math.min(b.y + dy, wa.y + wa.height - 40));
   win.setPosition(Math.round(x), Math.round(y));
+  snapDock();
 });
 
 // --- driving Terminal.app -------------------------------------------------
@@ -738,10 +745,285 @@ end tell`);
   return res;
 });
 
+// --- the dock -------------------------------------------------------------
+// The office's middle slot can hold one session's real Terminal window. Nothing
+// can be reparented into an Electron window, and a session already running in
+// Terminal cannot be re-attached to a terminal the board owns, so the slot is a
+// hole instead: the renderer leaves that rectangle transparent, the Terminal
+// window is moved to sit exactly underneath it, and the board lets clicks over
+// the hole fall through to it. The board stays on top, so the window's own
+// edges stay hidden under the board's frame.
+
+// What is docked: the tty that finds its window, and where that window was
+// before, so undocking puts it back rather than leaving it stranded under the
+// board.
+let dock = null;
+// The slot, in the page's own coordinates, or null while it is not on screen.
+let holeRect = null;
+// True while the docked window has been dragged out of the slot and left
+// elsewhere. The board stops following it then: moving the board must not
+// drag back a window that was deliberately put somewhere else.
+let dockOut = false;
+
+function setDockOut(out) {
+  if (dockOut === out) return;
+  dockOut = out;
+  if (win && !win.isDestroyed()) win.webContents.send('dock-out', out);
+}
+
+function windowByTty(tty, body) {
+  return `tell application "Terminal"
+  repeat with w in windows
+    if (count of tabs of w) > 0 then
+      repeat with t from 1 to count of tabs of w
+        if (tty of tab t of w) is "${tty}" then
+${body}
+        end if
+      end repeat
+    end if
+  end repeat
+  return "notfound"
+end tell`;
+}
+
+function holeBounds() {
+  if (!win || win.isDestroyed() || !holeRect) return null;
+  const c = win.getContentBounds();
+  // Terminal and Electron share one coordinate space: points, origin at the
+  // top left of the main display, y running down.
+  const l = Math.round(c.x + holeRect.x);
+  const t = Math.round(c.y + holeRect.y);
+  return [l, t, l + Math.round(holeRect.width), t + Math.round(holeRect.height)];
+}
+
+// Every dock change runs one after another. Each is an osascript of ~100ms,
+// and two at once (the first-session dock and a ball dropped a moment later,
+// or the chat button pressed mid-dock) would each see the other's half-done
+// state: a window moved into the slot and never tracked, or the slot itself
+// recorded as where a window came from.
+let dockQueue = Promise.resolve();
+function queued(fn) {
+  const run = dockQueue.then(fn, fn);
+  dockQueue = run.catch(() => {});
+  return run;
+}
+
+// Where each window was before it was first docked, kept for the life of the
+// board rather than only while docked. A session can drop out of a poll for a
+// moment and dock again from inside the slot, and without this its "before"
+// would be read as the slot.
+const homeOf = new Map();
+
+function sameRect(a, b) {
+  return !!a && !!b && a.length === 4 && a.every((v, i) => Math.abs(v - b[i]) <= 2);
+}
+
+// Following the board has to keep up with a drag, and a fresh osascript per
+// step cannot: ~140ms each, most of it starting the process, the rest walking
+// every tab for the tty. So the dock keeps one osascript open for as long as
+// the board runs, a JXA loop reading "id x y w h" lines from stdin and
+// answering each, which moves the window by id in ~16ms. Inline rather than a
+// file because the packaged app's src lives inside an asar osascript cannot read.
+const MOVER_JXA = `
+ObjC.import('Foundation');
+const term = Application('Terminal');
+const stdin = $.NSFileHandle.fileHandleWithStandardInput;
+const out = $.NSFileHandle.fileHandleWithStandardOutput;
+let buf = '';
+for (;;) {
+  const data = stdin.availableData;
+  if (data.length === 0) break;
+  buf += $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js;
+  let nl;
+  while ((nl = buf.indexOf('\\n')) >= 0) {
+    const line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    const [id, x, y, w, h] = line.split(' ').map(Number);
+    let reply = 'ok';
+    try { term.windows.byId(id).bounds = { x: x, y: y, width: w, height: h }; }
+    catch (e) { reply = 'err'; }
+    out.writeData($(reply + '\\n').dataUsingEncoding($.NSUTF8StringEncoding));
+  }
+}
+`;
+
+let mover = null;
+let moverBusy = false;
+let moverOut = '';
+let moverDone = null;   // called with the reply to the move in flight
+
+function startMover() {
+  if (mover) return mover;
+  mover = spawn('/usr/bin/osascript', ['-l', 'JavaScript', '-e', MOVER_JXA]);
+  mover.stdout.on('data', (d) => {
+    moverOut += d;
+    let nl;
+    while ((nl = moverOut.indexOf('\n')) >= 0) {
+      const reply = moverOut.slice(0, nl);
+      moverOut = moverOut.slice(nl + 1);
+      const done = moverDone;
+      moverDone = null;
+      moverBusy = false;
+      if (done) done(reply);
+    }
+  });
+  mover.on('exit', () => {
+    mover = null;
+    moverOut = '';
+    const done = moverDone;
+    moverDone = null;
+    moverBusy = false;
+    if (done) done('err');
+  });
+  mover.stdin.on('error', () => { /* exited under us; 'exit' cleans up */ });
+  return mover;
+}
+
+function stopMover() {
+  if (!mover) return;
+  try { mover.kill(); } catch { /* already gone */ }
+  mover = null;
+}
+
+function moveWindow(wid, b) {
+  return new Promise((resolve) => {
+    const m = startMover();
+    moverBusy = true;
+    moverDone = resolve;
+    m.stdin.write([wid, b[0], b[1], b[2] - b[0], b[3] - b[1]].join(' ') + '\n');
+  });
+}
+
+// One move in flight at a time. Moves asked for meanwhile are not queued up
+// behind it: the next one simply reads the board's position when it goes,
+// so a fast drag skips straight to where the board is now.
+let snapAgain = false;
+let boardMovedAt = 0;   // the watcher below holds off for a moment after a move
+async function snapDock() {
+  boardMovedAt = Date.now();
+  if (moverBusy) { snapAgain = true; return; }
+  if (!dock || dockOut || !holeRect || !win || win.isDestroyed() || !win.isVisible()) return;
+  const b = holeBounds();
+  if (!b || sameRect(b, dock.at)) return;
+  const was = dock;
+  let reply = was.wid ? await moveWindow(was.wid, b) : 'err';
+  // No id yet, or a stale one: Terminal hands out new window ids across its
+  // own restarts. Find it by tty the slow way, once, and keep the id it has now.
+  if (reply !== 'ok' && dock === was) {
+    const res = await osa(windowByTty(was.tty, `          set bounds of w to {${b.join(', ')}}
+          return (id of w) as text`));
+    reply = res.ok && /^\d+$/.test(res.out) ? 'ok' : 'err';
+    if (reply === 'ok') was.wid = Number(res.out);
+  }
+  if (reply === 'ok' && dock === was) was.at = b;
+  if (snapAgain) { snapAgain = false; snapDock(); }
+}
+
+async function undockNow(restore) {
+  const was = dock;
+  const wasOut = dockOut;
+  dock = null;
+  setDockOut(false);
+  if (!was) return;
+  // A window already dragged out was put where it is on purpose.
+  if (wasOut) { homeOf.delete(was.tty); return; }
+  const home = homeOf.get(was.tty);
+  if (!restore) return;
+  homeOf.delete(was.tty);
+  if (!home) return;
+  await osa(windowByTty(was.tty, `          set bounds of w to {${home.join(', ')}}
+          return "ok"`));
+}
+
+async function dockNow(tty) {
+  if (dock && dock.tty === tty && !dockOut) return { ok: true };
+  // The same window, asked for again while pulled out: put it back without
+  // forgetting where it first came from.
+  if (dock && dock.tty === tty) { dock = null; setDockOut(false); }
+  else await undockNow(true);
+  const b = holeBounds();
+  // Read where it was and move it in one call. A window put away by the office
+  // comes back, since a hidden window under the hole would leave a hole onto
+  // the desktop. Raised within Terminal and Terminal brought forward, because
+  // the hole shows whatever sits under the board: if another app's window were
+  // between them, the clicks would land in that app instead.
+  const res = await osa(windowByTty(tty, `          set oldBounds to bounds of w
+          if not (visible of w) then set visible of w to true
+          set selected of tab t of w to true
+          ${b ? `set bounds of w to {${b.join(', ')}}` : ''}
+          set index of w to 1
+          activate
+          set AppleScript's text item delimiters to ","
+          return "ok:" & (id of w as text) & "," & (oldBounds as text)`));
+  if (!res.ok) return res;
+  if (res.out === 'notfound') return { ok: false, error: 'that window is not open in Terminal' };
+  const [wid, ...old] = res.out.slice(3).split(',').map(Number);
+  const valid = old.length === 4 && old.every(Number.isFinite);
+  // A window already sitting in the slot is not coming from anywhere; keep the
+  // home it had the first time.
+  if (valid && !(homeOf.has(tty) && sameRect(old, b))) homeOf.set(tty, old);
+  dock = { tty, wid: Number.isFinite(wid) ? wid : null, at: b };
+  return { ok: true };
+}
+
+ipcMain.handle('dock-session', (_e, tty) => {
+  if (!TTY_RE.test(tty || '')) return { ok: false, error: 'that session has no terminal window' };
+  return queued(() => dockNow(tty));
+});
+
+// Terminal says nothing when its window is dragged, so the docked window is
+// looked at about once a second. Moving is left alone until it stops, since
+// setting bounds under a drag in progress makes the window jump in the hand.
+// Once it settles: centre inside the slot means it was put back, and it snaps
+// in; anywhere else means it was pulled out, and the board lets it be.
+let lastSeen = null;
+const DOCK_WATCH_MS = 900;
+setInterval(() => {
+  if (!dock || !holeRect || !win || win.isDestroyed() || !win.isVisible()) { lastSeen = null; return; }
+  queued(async () => {
+    if (!dock || !holeRect || Date.now() - boardMovedAt < 1500) return;
+    const was = dock;
+    const res = await osa(windowByTty(was.tty, `          set AppleScript's text item delimiters to ","
+          return (bounds of w) as text`));
+    if (dock !== was || !res.ok || res.out === 'notfound') return;
+    const cur = res.out.split(',').map(Number);
+    const slot = holeBounds();
+    if (cur.length !== 4 || !cur.every(Number.isFinite) || !slot) return;
+    if (sameRect(cur, slot)) { lastSeen = cur; was.at = slot; setDockOut(false); return; }
+    if (!sameRect(cur, lastSeen)) { lastSeen = cur; return; }
+    const cx = (cur[0] + cur[2]) / 2;
+    const cy = (cur[1] + cur[3]) / 2;
+    const inside = cx >= slot[0] && cx <= slot[2] && cy >= slot[1] && cy <= slot[3];
+    if (!inside) { setDockOut(true); return; }
+    const put = await osa(windowByTty(was.tty, `          set bounds of w to {${slot.join(', ')}}
+          return "ok"`));
+    if (dock === was && put.ok && put.out === 'ok') { was.at = slot; lastSeen = slot; setDockOut(false); }
+  });
+}, DOCK_WATCH_MS);
+
+// restore is false when the session has ended: its window is gone or about to
+// be, and moving it would only race Terminal closing it.
+ipcMain.handle('undock', (_e, restore) => queued(() => undockNow(restore !== false)));
+
+ipcMain.on('dock-hole', (_e, rect) => {
+  holeRect = rect && rect.width > 0 && rect.height > 0 ? rect : null;
+  snapDock();
+});
+
+// Clicks over the hole go to the terminal underneath. forward keeps mousemove
+// arriving while they do, which is the only way the page can tell the pointer
+// has left the hole and take the clicks back.
+ipcMain.on('dock-pass', (_e, on) => {
+  if (!win || win.isDestroyed()) return;
+  if (on) win.setIgnoreMouseEvents(true, { forward: true });
+  else win.setIgnoreMouseEvents(false);
+});
+
 // Sizes every session's window to 75x20, measures what that came out as, then
 // lays them out left to right. The right gutter keeps this panel uncovered.
 ipcMain.handle('tile-windows', async (_e, ttys) => {
-  const list = (ttys || []).filter((t) => TTY_RE.test(t));
+  // Tiling the docked window would pull it out from under its slot.
+  const list = (ttys || []).filter((t) => TTY_RE.test(t) && !(dock && t === dock.tty));
   if (!list.length) return { ok: false, error: 'no terminal sessions to tile' };
 
   const asList = list.map((t) => `"${t}"`).join(', ');
@@ -893,7 +1175,9 @@ ipcMain.handle('hide-sessions', async (_e, keepSessionId) => {
   // to the session itself, so hiding its terminal would take away the only
   // place the lead can actually be told to do something.
   const kept = live.find((s) => s.sessionId === keepSessionId);
-  const hideable = live.filter((s) => s.state !== 'blocked' && s.sessionId !== keepSessionId);
+  // The docked window is the one on screen by choice, the same as the lead.
+  const hideable = live.filter((s) => s.state !== 'blocked' && s.sessionId !== keepSessionId
+    && !(dock && s.tty === dock.tty));
   if (!hideable.length) return { ok: false, error: 'no terminal sessions to put away' };
 
   // A self-test drives the same gesture but must never take a window away, the
@@ -1257,6 +1541,16 @@ ipcMain.handle('set-on-top', (_e, next) => {
 app.on('window-all-closed', () => app.quit());
 app.on('will-quit', () => {
   if (timer) clearInterval(timer);
+  stopMover();
+  // A docked window would otherwise be left wherever the slot was, with no
+  // board around it. Synchronous, since the process is on its way out.
+  const home = dock && !dockOut && homeOf.get(dock.tty);
+  if (home) {
+    try {
+      execFileSync('/usr/bin/osascript', ['-e', windowByTty(dock.tty, `          set bounds of w to {${home.join(', ')}}
+          return "ok"`)], { timeout: 3000 });
+    } catch { /* Terminal busy or gone: nothing more to do on the way out */ }
+  }
   globalShortcut.unregisterAll();
   if (tray) { tray.destroy(); tray = null; }
 });

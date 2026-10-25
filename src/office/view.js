@@ -17,7 +17,7 @@
   const PLAN_W = 1035;
   const PLAN_H = 1791;
 
-  // The chat shares the row with the plan, and a chat squeezed to nothing is
+  // The docked terminal shares the row with the plan, and one squeezed to nothing is
   // worse than a slightly smaller plan, so the plan yields first.
   const CHAT_MIN_W = 200;
 
@@ -31,6 +31,7 @@
   let floor = null;       // the fitted box the plan is actually drawn in
   let onPick = null;      // told which session's ball was clicked
   let onBin = null;       // told which session's ball was dropped on the bin
+  let onDock = null;      // told which session's ball was dropped on the middle slot
   let bin = null;         // the drop target, only shown while something is moving
   // The ball being dragged, if any. render() runs every frame off the movement
   // layer, so it has to leave this one alone or the hand and the walk would
@@ -57,6 +58,7 @@
     bin = host.querySelector('.bin');
     onPick = opts && opts.onPick;
     onBin = opts && opts.onBin;
+    onDock = opts && opts.onDock;
     layer = host.querySelector('.balls');
     overlay = host.querySelector('.geo');
     geometry = window.OfficeGeometry;
@@ -191,6 +193,23 @@
       && ev.clientY >= r.top && ev.clientY <= r.bottom;
   }
 
+  // The middle slot: dropping a ball there docks that session's terminal,
+  // swapping out whichever one was there.
+  function dockTarget() {
+    return host.querySelector('#dock');
+  }
+  function overDock(ev) {
+    const t = dockTarget();
+    if (!t) return false;
+    const r = t.getBoundingClientRect();
+    return ev.clientX >= r.left && ev.clientX <= r.right
+      && ev.clientY >= r.top && ev.clientY <= r.bottom;
+  }
+  function clearDockHot() {
+    const t = dockTarget();
+    if (t) t.classList.remove('drop-hot');
+  }
+
   function startDrag(ev, sessionId, el) {
     if (ev.button !== 0) return;
     ev.preventDefault();
@@ -210,6 +229,8 @@
       const hot = overBin(m);
       bin.classList.toggle('hot', hot);
       el.classList.toggle('doomed', hot);
+      const t = dockTarget();
+      if (t) t.classList.toggle('drop-hot', !hot && overDock(m));
     };
 
     // A drag can end without a pointerup: the browser can take the capture away
@@ -223,6 +244,7 @@
       drag = null;
       host.classList.remove('dragging');
       bin.classList.remove('hot');
+      clearDockHot();
       el.classList.remove('doomed');
       el.onpointermove = null;
       el.onpointerup = null;
@@ -236,6 +258,7 @@
       drag = null;
       host.classList.remove('dragging');
       bin.classList.remove('hot');
+      clearDockHot();
       el.classList.remove('doomed');
       el.onpointermove = null;
       el.onpointerup = null;
@@ -246,6 +269,7 @@
       // Never moved: this was a click, and a click picks the session.
       if (!was.moved) { if (onPick) onPick(sessionId); return; }
       if (overBin(u) && onBin) onBin(sessionId);
+      else if (overDock(u) && onDock) onDock(sessionId);
       // Dropped anywhere else, the next frame puts it back where the movement
       // layer says it belongs, which is the honest answer: a ball's place is
       // decided by what its session is doing, not by where it was left.

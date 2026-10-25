@@ -320,14 +320,30 @@
   /* The plan measures itself against this box, so it must hold no padding of
      its own and must be free to shrink, hence min-width: 0 on a flex child. */
   /* Shrink-to-fit around the plan, which is sized in code. It cannot be flex:1
-     any more: the chat shares this row, so the plan's width is worked out from
+     any more: the docked terminal shares this row, so the plan's width is worked out from
      the whole view rather than measured from the box it sits in, which would
      be circular. */
   #office .stage { flex: 0 0 auto; display: flex; align-items: flex-start; }
-  #office .chat { flex: 1; min-width: 0; display: flex; flex-direction: column;
-                  gap: 6px; border: 1px solid var(--line); border-radius: 4px;
-                  padding: 6px; background: var(--bg-row); }
   #office .chat-head { display: flex; gap: 6px; flex: 0 0 auto; }
+  #office .hole[hidden], #office .dock-empty[hidden] { display: none; }
+  /* The dock is a hole, not a picture: the panel stops painting its own
+     background, and the hole paints it back everywhere except over itself with
+     a shadow too big to have an edge. z-index -1 puts that shadow under the
+     rest of the panel's content, and isolation keeps it inside the panel's own
+     rounded clip. What shows through is the real Terminal window behind. */
+  .panel.holed { background: transparent; isolation: isolate; }
+  #office .dock { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  /* The slot keeps its size whichever face is showing, so main.js always has
+     the rectangle a pulled-out window would be dropped back into. No z-index
+     of its own, so the hole's -1 still lands in the panel's stacking context. */
+  #office .slot { flex: 1; min-height: 0; position: relative; }
+  #office .hole { position: absolute; inset: 0; z-index: -1;
+                  border-radius: 10px; box-shadow: 0 0 0 4000px var(--bg); }
+  #office .dock-empty { position: absolute; inset: 0; display: flex; align-items: center;
+                        justify-content: center; text-align: center; padding: 12px;
+                        border: 1px dashed var(--line); border-radius: 10px;
+                        color: var(--ink-dim); font-size: 12px; }
+  #office .drop-hot { outline: 2px dashed var(--ink-dim); outline-offset: -2px; }
   #office .chat-head .lead { flex: 1; min-width: 0; font-size: 11px; color: var(--ink);
                              padding: 3px 2px; overflow: hidden; text-overflow: ellipsis;
                              white-space: nowrap; }
@@ -366,20 +382,6 @@
   #office .chat-head button { background: var(--bg); color: var(--ink-dim);
                               border: 1px solid var(--line); border-radius: 3px;
                               font: inherit; font-size: 11px; padding: 2px 7px; cursor: pointer; }
-  #office .chat-log { flex: 1; min-height: 0; overflow-y: auto; display: flex;
-                      flex-direction: column; gap: 7px; padding: 2px; font-size: 12px; }
-  #office .chat-box { display: flex; gap: 6px; flex: 0 0 auto; }
-  #office .chat-box textarea { flex: 1; min-width: 0; resize: none; font: inherit;
-                               font-size: 12px; background: var(--bg); color: var(--ink);
-                               border: 1px solid var(--line); border-radius: 3px; padding: 4px; }
-  #office .chat-box button { background: var(--bg); color: var(--ink);
-                             border: 1px solid var(--line); border-radius: 3px;
-                             font: inherit; padding: 0 12px; cursor: pointer; }
-  .msg { white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
-  .msg .who { color: var(--ink-dim); font-size: 10px; display: block; margin-bottom: 1px; }
-  .msg.me .body { color: var(--ink); }
-  .msg.them .body { color: var(--working); }
-  .msg.err .body { color: var(--blocked); }
   /* About an inch. Fixed, so the plan never trades size against the controls. */
   #office .ctl { flex: 0 0 96px; width: 96px; display: flex; flex-direction: column;
                  gap: 6px; font-size: 10px; color: var(--ink-dim); overflow-y: auto; }
@@ -436,9 +438,6 @@
   #office .ball.doomed { opacity: .6; }
   /* Sessions that have exited. Dimmer than the live boxes, and draggable onto
      the floor to start them again where they left off. */
-  #office .others.gone .other { opacity: .55; border-style: dashed; cursor: grab; }
-  #office .others.gone .other:hover { opacity: 1; }
-  #office.dropping .stage { outline: 1px dashed var(--working); outline-offset: 3px; }
   .ball { position: absolute; border-radius: 50%; transform: translate(-50%, -50%); cursor: grab;
           border: 1px solid rgba(0,0,0,.45); box-shadow: 0 1px 4px rgba(0,0,0,.4); }
   .ball.is-working { background: var(--working); }
@@ -491,19 +490,15 @@
           </div>
         </div>
       </div>
-      <div class="chat" id="chat">
+      <div class="dock" id="dock">
         <div class="others" id="others"></div>
-      <div class="others gone" id="recent"></div>
         <div class="chat-head">
-          <span class="lead" id="chatwho">no lead</span>
-          <button id="chathandoff" hidden title="context is large: start a fresh session from a summary of this one">hand off</button>
-          <button id="chatmodel" title="which model answers here; click to change">sonnet</button>
-          <button id="chatnew" title="start again from the lead's latest state">fresh</button>
+          <span class="lead" id="dockwho"></span>
+          <button id="dockhandoff" hidden title="context is large: start a fresh session from a summary of this one">hand off</button>
         </div>
-        <div class="chat-log" id="chatlog"></div>
-        <div class="chat-box">
-          <textarea id="chatin" rows="2" placeholder="ask this session something…"></textarea>
-          <button id="chatsend">send</button>
+        <div class="slot" id="slot">
+          <div class="hole" id="hole" hidden></div>
+          <div class="dock-empty" id="dockempty">drop a session here</div>
         </div>
       </div>
       <div class="ctl">
@@ -846,9 +841,10 @@
   }
 
   function paint() {
+    syncDock();
     if (!expanded) { renderRail(); return; }
     if (view === 'office') {
-      paintChatHeads();
+      paintDockHeads();
       syncHideBtn();
       window.Office.update(current.sessions, current.links);
     }
@@ -868,6 +864,7 @@
     // stops being the visible view, not merely hidden behind a style.
     window.Office.setVisible(view === 'office');
     if (view !== 'office') { showMore(false); showHire(false); }
+    paintDock();
     // The office carries the board's own actions in its side strip, so the
     // footer would be a second copy of the same five buttons. It stays in the
     // DOM either way: the strip drives it rather than reimplementing it.
@@ -898,6 +895,7 @@
 
   window.board.onSnapshot((data) => {
     current = data;
+    syncDock();
     if (openAsk) return;
     if (view === 'map' && window.Canvas.busy()) return;
     paint();
@@ -1060,8 +1058,9 @@
     toast,
     // Clicking a ball is the quickest way to say who you mean, and it answers
     // the "which one is that" question the colours alone cannot.
-    onPick: (sessionId) => setLead(sessionId),
+    onPick: (sessionId) => { dockAuto = true; dockSession(sessionId); },
     onBin: (sessionId) => endWorker(sessionId),
+    onDock: (sessionId) => { dockAuto = true; dockSession(sessionId); },
   });
 
   // The controls are buttons now rather than checkboxes, so each one carries
@@ -1083,54 +1082,129 @@
     el(from).onclick = () => el(to).click();
   }
 
-  // The chat talks to a fork of whichever session is picked, so the fork's own
-  // id is the conversation: hold it and later messages continue, drop it and
-  // the next message starts again from that session's current state.
-  let chatForkId = null;
-  let chatBusy = false;
+  // The dock: one session's own Terminal window, held in the office's middle
+  // slot. When the board opens, the slot takes the first session that was
+  // opened; dropping a ball on the slot, or clicking a ball or a box, swaps
+  // that one in.
+  // main.js moves the window, this side only decides which and keeps the hole
+  // reported. Not remembered across restarts: "the first session" is asked
+  // afresh each time the board opens.
+  let dockId = null;
+  // Cleared when a dock fails, so a window that cannot be found is not looked
+  // for again on every poll. A drop turns it back on.
+  let dockAuto = true;
 
-  // Sonnet by default; the button cycles through the three for the moments a
-  // question deserves Opus or is simple enough for Haiku. Switching mid-chat is
-  // fine: the next message resumes the same conversation on the new model.
-  const CHAT_MODELS = ['sonnet', 'opus', 'haiku'];
-  let chatModel = 'sonnet';
-  try { if (CHAT_MODELS.includes(localStorage.getItem('chatModel'))) chatModel = localStorage.getItem('chatModel'); } catch { /* private window */ }
+  function dockable() { return current.sessions.filter((s) => s.pid && s.tty); }
 
-  // Which session the chat talks to. Remembered across restarts because it is a
-  // standing choice about how the board is being used, not a per-session one,
-  // and falling back to a different session each launch would make the chat
-  // mean something different every time it opened.
-  let leadId = null;
-  try { leadId = localStorage.getItem('officeLead'); } catch { leadId = null; }
-
-  function setLead(sessionId) {
-    if (!sessionId || sessionId === leadId) return;
-    leadId = sessionId;
-    try { localStorage.setItem('officeLead', sessionId); } catch { /* private window */ }
-    // A different session is a different conversation, so the fork and the
-    // transcript go with it rather than carrying over silently.
-    chatForkId = null;
-    el('chatlog').innerHTML = '';
-    paintChatHeads();
+  function firstOpened() {
+    return dockable().slice()
+      .sort((a, b) => (a.startedAt || Infinity) - (b.startedAt || Infinity))[0] || null;
   }
 
-  function chatTarget() {
-    const live = current.sessions.filter((s) => s.pid);
-    const chosen = live.find((s) => s.sessionId === leadId);
-    if (chosen) return chosen;
-    // Nothing chosen yet, or the chosen one has gone. The busiest session is
-    // the best guess at who is running things, and it is only a default: the
-    // moment a ball or a box is clicked it stops guessing.
-    return live.slice().sort((a, b) => (a.idleSec || 0) - (b.idleSec || 0))[0] || null;
+  // Set by main.js when the docked window has been dragged out of the slot and
+  // left somewhere else. The slot then shows the board again instead of a hole
+  // onto whatever is behind it, until the window is dropped back.
+  let dockOut = false;
+  window.board.onDockOut((out) => { dockOut = !!out; paintDock(); });
+
+  function slotShown() { return expanded && view === 'office' && !!dockId; }
+  function holeShown() { return slotShown() && !dockOut; }
+
+  async function dockSession(sessionId) {
+    const s = dockable().find((x) => x.sessionId === sessionId);
+    if (!s) { toast('that session has no Terminal window to dock'); return; }
+    if (sessionId === dockId && !dockOut) return;
+    // Set before the call, so the poll does not start a second dock while this
+    // one is still moving the window, and so the hole is on screen and
+    // reported by the time main.js goes to measure it.
+    dockId = sessionId;
+    paintDock();
+    const res = await window.board.dockSession(s.tty);
+    if (!res.ok) {
+      toast(res.error);
+      if (dockId === sessionId) dockId = null;
+      dockAuto = false;   // a window that cannot be found will not be found next poll either
+      paintDock();
+    }
   }
 
-  function paintChatHeads() {
-    const lead = chatTarget();
-    el('chatwho').textContent = lead ? (lead.title || lead.sessionId.slice(0, 8)) : 'no live sessions';
-    el('chatwho').className = 'lead ' + ctxLevel(lead);
-    el('chathandoff').hidden = !ctxLevel(lead);
-    el('chatwho').title = lead
-      ? 'chatting with ' + (lead.title || lead.sessionId) + (tokenLine(lead) ? ' · ' + tokenLine(lead) : '')
+  function syncDock() {
+    if (dockId && !dockable().some((s) => s.sessionId === dockId)) {
+      // The session ended. Its window is closing on its own, so nothing to put back.
+      dockId = null;
+      window.board.undock(false);
+    }
+    // Only fills while the slot is actually on screen: docking moves a window
+    // and brings Terminal forward, which is not something to do to someone
+    // reading the list.
+    if (!dockId && dockAuto && expanded && view === 'office') {
+      const first = firstOpened();
+      if (first) { dockSession(first.sessionId); return; }
+    }
+    paintDock();
+  }
+
+  function paintDock() {
+    el('hole').hidden = !dockId || dockOut;
+    el('dockempty').hidden = !!dockId && !dockOut;
+    el('dockempty').textContent = dockId
+      ? 'pulled out · drag its window back here, or click its ball'
+      : 'drop a session here';
+    document.querySelector('.panel').classList.toggle('holed', holeShown());
+    reportHole();
+  }
+
+  // main.js places the window from this rectangle, so it is resent whenever it
+  // could have changed, and only when it did.
+  let lastHole = '';
+  function reportHole() {
+    let rect = null;
+    if (slotShown()) {
+      const r = el('slot').getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) rect = { x: r.left, y: r.top, width: r.width, height: r.height };
+    }
+    const key = JSON.stringify(rect);
+    if (!holeShown()) setPass(false);
+    if (key === lastHole) return;
+    lastHole = key;
+    window.board.dockHole(rect);
+  }
+  new ResizeObserver(reportHole).observe(el('slot'));
+  window.addEventListener('resize', reportHole);
+
+  // Clicks over the hole belong to the terminal, everywhere else to the board.
+  // Decided by what is on top at the pointer, not just by the rectangle, so a
+  // popover or toast lying over the hole keeps its own clicks. The hole sits at
+  // z-index -1, so on an uncovered spot the topmost box is the dock itself.
+  // Never mid-drag: a ball being carried over the slot must stay ours.
+  let passing = false;
+  function setPass(on) {
+    if (on === passing) return;
+    passing = on;
+    window.board.dockPass(on);
+  }
+  document.addEventListener('mousemove', (e) => {
+    if (!holeShown() || e.buttons || window.Office.dragging()) { setPass(false); return; }
+    const r = el('slot').getBoundingClientRect();
+    const inside = e.clientX >= r.left && e.clientX < r.right && e.clientY >= r.top && e.clientY < r.bottom;
+    const top = inside ? document.elementFromPoint(e.clientX, e.clientY) : null;
+    setPass(inside && (top === el('slot') || top === el('hole') || top === el('dock')));
+  });
+
+  function docked() {
+    return current.sessions.find((s) => s.pid && s.sessionId === dockId) || null;
+  }
+
+  // The slot's bar names the docked session, and above it a box for every
+  // other live one.
+  function paintDockHeads() {
+    const lead = docked();
+    el('dockwho').textContent = lead ? (lead.title || lead.sessionId.slice(0, 8)) : 'no live sessions';
+    el('dockwho').className = 'lead ' + ctxLevel(lead);
+    el('dockhandoff').hidden = !ctxLevel(lead);
+    el('dockwho').title = lead
+      ? 'docked: ' + (lead.title || lead.sessionId) + (tokenLine(lead) ? ' · ' + tokenLine(lead) : '')
+        + ' · drop another ball here to swap'
       : '';
 
     const others = current.sessions.filter((s) => s.pid && (!lead || s.sessionId !== lead.sessionId));
@@ -1149,27 +1223,6 @@
         ${ctxLevel(s) ? '<span class="go" data-act="handoff" title="context is large: start a fresh session from a summary of this one">hand off</span>' : ''}
         <span class="go" data-act="show" title="bring its window back">show</span>
         <span class="go" data-act="end" title="end this session">&times;</span></div>`).join('');
-    // Sessions that have exited, newest first and only a few: this is a way
-    // back to what you were just doing, not a history. Dragging one onto the
-    // floor starts it again where it left off.
-    const gone = current.sessions.filter((x) => !x.pid).slice(0, 4);
-    const goneHtml = gone.map((x) => `<div class="other" draggable="true"
-        data-id="${esc(x.sessionId)}" data-cwd="${esc(x.cwd || '')}"
-        title="${esc(x.title || '')} · drag onto the floor to reopen">
-        <span class="pip" style="background: var(--closed)"></span>
-        <span class="what">${esc(x.title || x.sessionId.slice(0, 8))}</span></div>`).join('');
-    if (el('recent').dataset.sig !== goneHtml) {
-      el('recent').dataset.sig = goneHtml;
-      el('recent').innerHTML = goneHtml;
-      for (const chip of el('recent').querySelectorAll('.other')) {
-        chip.ondragstart = (e) => {
-          e.dataTransfer.setData('text/plain', chip.dataset.id);
-          e.dataTransfer.effectAllowed = 'copy';
-          el('office').classList.add('dropping');
-        };
-        chip.ondragend = () => el('office').classList.remove('dropping');
-      }
-    }
 
     // Only rewritten when it would actually look different, because this runs
     // on every poll and replacing the nodes would kill any hover underway.
@@ -1184,66 +1237,13 @@
         if (act === 'show') { e.stopPropagation(); showSession(box.dataset.id); return; }
         if (act === 'end') { e.stopPropagation(); endWorker(box.dataset.id); return; }
         if (act === 'handoff') { e.stopPropagation(); if (row) handOff(row); return; }
-        setLead(box.dataset.id);
+        dockAuto = true;
+        dockSession(box.dataset.id);
       };
     }
   }
 
-  function say(cls, who, body) {
-    const log = el('chatlog');
-    const d = document.createElement('div');
-    d.className = 'msg ' + cls;
-    d.innerHTML = `<span class="who">${esc(who)}</span><span class="body">${esc(body)}</span>`;
-    log.appendChild(d);
-    log.scrollTop = log.scrollHeight;
-    return d;
-  }
-
-  async function chatSend() {
-    if (chatBusy) return;
-    const text = el('chatin').value.trim();
-    const target = chatTarget();
-    if (!text) return;
-    if (!target) { say('err', 'board', 'nobody to talk to'); return; }
-    el('chatin').value = '';
-    say('me', 'you', text);
-    chatBusy = true;
-    const pending = say('them', target.title || 'session', 'thinking…');
-    const res = await window.board.chat({
-      sessionId: target.sessionId,
-      forkId: chatForkId,
-      cwd: target.cwd,
-      message: text,
-      model: chatModel,
-    });
-    chatBusy = false;
-    pending.remove();
-    if (res.ok) {
-      chatForkId = res.forkId || chatForkId;
-      say('them', `${target.title || 'session'} · ${costLine(res.cost)}`, res.answer || '(said nothing)');
-    } else {
-      say('err', 'board', res.error || 'no answer');
-    }
-  }
-
-  el('chatsend').onclick = chatSend;
-  el('chathandoff').onclick = () => { const lead = chatTarget(); if (lead) handOff(lead); };
-  el('chatmodel').textContent = chatModel;
-  el('chatmodel').onclick = () => {
-    chatModel = CHAT_MODELS[(CHAT_MODELS.indexOf(chatModel) + 1) % CHAT_MODELS.length];
-    el('chatmodel').textContent = chatModel;
-    try { localStorage.setItem('chatModel', chatModel); } catch { /* private window */ }
-  };
-  el('chatin').onkeydown = (e) => {
-    // Enter sends, since this is a chat box and not a document. A newline is
-    // still reachable with shift, which is the convention everywhere else.
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); chatSend(); }
-  };
-  el('chatnew').onclick = () => {
-    chatForkId = null;
-    el('chatlog').innerHTML = '';
-    say('err', 'board', 'started again from that session\'s latest state');
-  };
+  el('dockhandoff').onclick = () => { const lead = docked(); if (lead) handOff(lead); };
 
 
   // ---- plan usage strip ------------------------------------------------
@@ -1396,7 +1396,7 @@
     paintHideBtn();
   }
   el('ohide').onclick = async () => {
-    const lead = chatTarget();
+    const lead = docked();
     const res = termsAway
       ? await window.board.showSessions()
       : await window.board.hideSessions(lead && lead.sessionId);
@@ -1416,24 +1416,6 @@
     if (!res.ok) toast(res.error);
     await syncHideBtn();
   }
-
-  // Dropping a closed session on the floor starts it again. --resume is what
-  // makes that a continuation rather than a new session that happens to know
-  // nothing, so the work picks up where it stopped.
-  const stage = document.querySelector('#office .stage');
-  stage.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
-  stage.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    el('office').classList.remove('dropping');
-    const id = e.dataTransfer.getData('text/plain');
-    const row = current.sessions.find((x) => x.sessionId === id);
-    if (!row) return;
-    toast('reopening ' + (row.title || 'that session') + '…');
-    const res = await window.board.openSessionWindow({
-      slot: liveSlots(), resumeId: row.sessionId, cwd: row.cwd,
-    });
-    toast(res.ok ? res.out : res.error);
-  });
 
   async function endWorker(sessionId) {
     const row = current.sessions.find((s) => s.sessionId === sessionId);

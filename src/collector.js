@@ -501,6 +501,9 @@ async function snapshot(opts = {}) {
       row.shortId = a.shortId;
       row.reported = a.status;
       row.waitingFor = a.waitingFor;
+      // When the session was opened, which is what decides the board's first
+      // session, the one docked when the board opens.
+      row.startedAt = a.startedAt || null;
     }
   }
 
@@ -518,6 +521,7 @@ async function snapshot(opts = {}) {
       match.pid = p.pid;
       match.uptimeSec = p.uptimeSec;
       match.etime = p.etime;
+      match.startedAt = Date.now() - p.uptimeSec * 1000;
       match.viaProcessScan = true;
     }
   }

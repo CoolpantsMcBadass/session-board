@@ -519,3 +519,59 @@ v0.15.0 (2026-10-15): the plan's real usage limits, as bars under the header
 - measured and rejected: --disable-slash-commands and --setting-sources '' save
   nothing on top of this. Dropping Grep/Glob would save 1.5K per call but leave
   ask unable to search or find files by name; left as a reported trade-off
+
+2026-10-24  v0.17.0  dock a session's terminal in the office
+
+- the office's middle slot can hold one session's real Terminal window. When the
+  office opens, it takes the session that was opened first (registry startedAt,
+  or ps etime for sessions found by the process scan). Dropping a ball on the
+  slot swaps that session in; the one it replaces goes back where it was. The
+  "chat" button on the slot's bar sends the window home and shows the chat.
+  When the docked session ends, the next oldest takes its place
+- how: a window cannot be reparented into Electron, so the slot is a hole. The
+  panel stops painting its background and the hole paints it back around
+  itself (z-index -1 plus a large box-shadow, clipped by the panel's rounded
+  overflow). main.js moves the Terminal window, found by tty, to sit exactly
+  under it and follows board moves and resizes. Clicks over the hole fall
+  through via setIgnoreMouseEvents(forward), decided by elementFromPoint so a
+  popover over the hole keeps its own clicks
+- docking raises the window and activates Terminal: the hole shows whatever is
+  under the board, so another app's window in between would take the clicks
+- every dock change runs through one queue, and each window's original bounds
+  are kept for the life of the board. A Haiku review found that concurrent
+  docks could strand a window in the slot or record the slot as its home, and
+  that a snap throwing mid-undock left the window never following again
+- quitting puts the docked window back (tested: docked, quit, back at its
+  original bounds). Tile and put-away leave the docked window alone
+- trap: `before` is reserved in AppleScript, and a variable named that is a
+  syntax error that makes the dock fail
+- the chat panel is gone: the middle slot is always the dock. The boxes for the
+  other live sessions and the recent closed ones, and the hand off button, moved
+  above the docked terminal. Clicking a ball or a box now docks that session
+  instead of picking a chat lead, and put away keeps the docked window up. With
+  nothing docked, the slot shows "drop a session here". main.js's chat handler
+  and jobs.js's chat job are now unused by the page; left for now
+- closed-session boxes removed from the office (and with them drag-to-floor to
+  reopen; the list's "recent" section still reopens)
+- a docked window dragged out and dropped back now snaps in. Terminal reports
+  no drag, so main.js reads the docked window's bounds every 900ms; a window
+  that has stopped moving with its centre inside the slot is snapped back,
+  anywhere else it counts as pulled out: the slot shows the board again with
+  "pulled out · drag its window back here, or click its ball", and the board
+  stops following it on moves or restoring it on quit. Clicking its ball docks
+  it again. The watcher holds off 1.5s after any board move so a window still
+  catching up is not mistaken for one pulled out. The slot is now a wrapper
+  that keeps its size whichever face shows, so the rectangle is always known.
+  Tested by script: pulled out -> placeholder shown, dropped back ~50px off ->
+  snapped to the exact slot bounds
+- the docked window keeps up with a board drag. Each follow step used to be a
+  fresh osascript walking every tab for the tty, ~140ms (measured; ~95ms of it
+  starting the process). Now one osascript stays open for the board's life, a
+  JXA loop taking "id x y w h" on stdin and moving the window by id: ~16ms a
+  move. Moves asked for while one is in flight collapse into the next, which
+  reads the board's latest position. A stale window id falls back to the tty
+  search once and keeps the new id. The JXA is inline (osascript -e) since the
+  packaged app's src is inside an asar osascript cannot read
+- measured with a scripted 40-step drag (8px per 16ms): the terminal held its
+  offset from the board on 33 of 40 samples, at most ~5 steps behind on the
+  rest, and settled exactly

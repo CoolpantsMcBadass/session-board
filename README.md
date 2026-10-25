@@ -222,14 +222,20 @@ the whole session instead of scrolling away as one turn), and a permission mode.
 footer's own `+opus` / `+sonnet` / `+haiku` still pick a model the plain way and are
 unaffected by any of this.
 
-The chat panel on the right talks to a fork of whichever session is "lead" — click its
-ball or its box in the strip to choose. Replies carry the fork's own session id back, so
-a conversation continues across messages instead of restarting fresh each time; **fresh**
-drops that and starts over from the lead's current state. Like the map's relay, this
-never reaches the live session: the fork is a read-only copy, and nothing typed here can
-make the person at that terminal do anything.
+The middle of the office is a dock: one session's own Terminal window, held in place
+beside the floorplan. When the office opens it takes the session that was opened first.
+Drop a ball on it, or click a ball or a session's box above it, to swap that session in;
+the one it replaces goes back to wherever its window was. The board cannot put another
+app's window inside its own, so the dock is a see-through hole with the Terminal window
+moved to sit exactly underneath, and clicks over the hole go straight through to it.
+Docking brings Terminal forward, since the hole shows whatever is directly under the
+board. The window follows the board as it moves, through one osascript kept open for
+the purpose (a fresh one per step was ~140ms and visibly trailed a drag). Drag the
+window out and leave it somewhere and the slot says it was pulled out; drop it back with
+its centre over the slot and it snaps in. Quitting puts a docked window back where it
+came from.
 
-**put away** hides the Terminal window of every session but the lead's, so the office can
+**put away** hides the Terminal window of every session but the docked one, so the office can
 stand in for them without a wall of terminal windows behind it, and the same button
 brings them back. A session blocked on a permission or trust prompt is never put away:
 nothing outside that window can answer it, so hiding it would strand the session for
