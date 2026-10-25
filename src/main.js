@@ -733,13 +733,21 @@ ipcMain.handle('move-into-board', async (_e, sessionId) => {
   const command = await pidLooksLikeSession(s.pid);
   if (!command) return { ok: false, error: 'pid ' + s.pid + ' is no longer that session' };
 
+  // A session that has not been sent anything yet has no transcript, and
+  // `claude --resume` on it prints "No conversation found" and exits. The board
+  // used to end the original first, so the move lost the session and docked
+  // nothing. With no conversation to carry over, a fresh session in the same
+  // folder is the same thing.
+  const resumable = hasTranscript(s.sessionId);
   const { response } = await dialog.showMessageBox(win, {
     type: 'question',
     buttons: ['Move it here', 'Cancel'],
     defaultId: 0,
     cancelId: 1,
     message: 'Move "' + (s.title || 'this session') + '" into the board?',
-    detail: 'It closes in Terminal and continues here with the same conversation. '
+    detail: (resumable
+      ? 'It closes in Terminal and continues here with the same conversation. '
+      : 'It has no conversation yet, so it closes in Terminal and a fresh session opens here in the same folder. ')
       + 'From then on it keeps running even when the board is closed.',
   });
   if (response !== 0) return { ok: false, error: 'cancelled' };
@@ -751,11 +759,25 @@ ipcMain.handle('move-into-board', async (_e, sessionId) => {
   // transcript, so the resume waits for the old process to be gone.
   for (let i = 0; i < 50 && !gone(s.pid); i++) await new Promise((r) => setTimeout(r, 100));
   if (!gone(s.pid)) return { ok: false, error: 'it did not quit in Terminal; nothing was moved' };
-  const res = await host.start({ cwd: s.cwd, claudeArgs: '--resume ' + s.sessionId });
+  const res = await host.start({ cwd: s.cwd, claudeArgs: resumable ? '--resume ' + s.sessionId : '' });
   lastPayload = '';
   poll();
+  if (!res.ok) return res;
+  // tmux closes a session whose program exits, so one that is gone a moment
+  // later never started; saying so beats docking nothing without a word.
+  await new Promise((r) => setTimeout(r, 1500));
+  if (!(await host.list()).some((h) => h.name === res.name)) {
+    return { ok: false, error: 'it closed in Terminal, but claude --resume ' + s.sessionId.slice(0, 8) + ' exited at once here' };
+  }
   return res;
 });
+
+function hasTranscript(sessionId) {
+  const root = path.join(app.getPath('home'), '.claude', 'projects');
+  let dirs = [];
+  try { dirs = fs.readdirSync(root); } catch { return false; }
+  return dirs.some((d) => fs.existsSync(path.join(root, d, sessionId + '.jsonl')));
+}
 
 // Sizes every session's window to 75x20, measures what that came out as, then
 // lays them out left to right. The right gutter keeps this panel uncovered.

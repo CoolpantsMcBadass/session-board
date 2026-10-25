@@ -701,3 +701,22 @@ v0.15.0 (2026-10-15): the plan's real usage limits, as bars under the header
   hosted session cleanly and tmux closes it
 - harness note: SB_TEST_TRASH also fires the map's trash test, which switches
   the board to the map, so an office test has to switch back first
+
+2026-10-25  v0.19.4  moving a session that has no conversation yet
+
+- dropping a Terminal session on the dock ended it and docked nothing when that
+  session had not been sent anything yet. A session gets its transcript with
+  its first message, so `claude --resume <id>` on one without it prints "No
+  conversation found" and exits; tmux closes the session with it, and the
+  original was already ended. Now the move checks for the transcript first:
+  without one there is nothing to carry over, so the dialog says a fresh
+  session opens in the same folder, and that is what is started
+- after any move, the hosted session has to still be there 1.5s later, or the
+  board says the resume exited instead of quietly docking nothing
+- reproduced with throwaway Haiku sessions in Terminal and a playwright drag
+  onto the dock in a test copy: a session with history moved and docked
+  before and after; one with no message ended and docked nothing before, and
+  moved and docked after
+- not changed: a session opened in ~ shows Claude Code's "trust this folder"
+  screen, whose default is "No, exit". Enter there ends the session. That is
+  the CLI's own gate and the board does not answer it for you
