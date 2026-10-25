@@ -1099,6 +1099,33 @@
     }
     return true;
   });
+  // Trackpad scrolling, done here rather than by xterm. Claude takes the mouse,
+  // so a scroll reaches it as wheel reports, and xterm makes those for a mouse
+  // wheel: a movement under 50px is damped to 0.3x and each event sends at
+  // most one report, so a trackpad swipe travelled ~50px before anything
+  // scrolled. Here every cell-height of travel is one report, sent at once.
+  let wheelRest = 0;
+  term.attachCustomWheelEventHandler((e) => {
+    if (term.modes.mouseTrackingMode === 'none' || e.deltaY === 0 || e.shiftKey) return true;
+    const screen = el('term').querySelector('.xterm-screen');
+    if (!screen) return true;
+    const box = screen.getBoundingClientRect();
+    const cellH = box.height / term.rows;
+    const px = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY * cellH : e.deltaY;
+    wheelRest += px / cellH;
+    const steps = Math.trunc(wheelRest);
+    wheelRest -= steps;
+    if (steps) {
+      // SGR mouse reports, which tmux asks for: 64 is wheel up, 65 down.
+      // Placed where the pointer is, 1-based, as a real wheel would be.
+      const col = Math.min(term.cols, Math.max(1, Math.floor((e.clientX - box.left) / (box.width / term.cols)) + 1));
+      const row = Math.min(term.rows, Math.max(1, Math.floor((e.clientY - box.top) / cellH) + 1));
+      const report = `\x1b[<${steps < 0 ? 64 : 65};${col};${row}M`;
+      window.board.termInput(report.repeat(Math.min(Math.abs(steps), 8)));
+    }
+    e.preventDefault();
+    return false;
+  });
   term.onData((d) => window.board.termInput(d));
   term.onResize(({ cols, rows }) => window.board.termResize(cols, rows));
   window.board.onTermData((d) => term.write(d));

@@ -670,3 +670,16 @@ v0.15.0 (2026-10-15): the plan's real usage limits, as bars under the header
   The running server's copies were cleared with set-environment -g -u, and
   the two empty sessions it started were ended. Verified: relaunched app has
   no SB_ variables, starts nothing, and docks the oldest hosted session
+
+2026-10-25  v0.19.2  trackpad scrolling in the dock starts at once
+
+- claude runs full-screen and takes the mouse (alternate screen, mouse_any=1),
+  so tmux passes the wheel straight to it and scrolling is wheel reports from
+  xterm. xterm builds those for a mouse wheel: a pixel movement under 50px is
+  damped to 0.3x and each event sends at most one report, so a trackpad swipe
+  travelled ~50px before the first scroll. The dock now handles the wheel
+  itself while the program has the mouse: every cell-height of travel is one
+  SGR wheel report (64 up / 65 down, at the pointer's cell), sent at once, up
+  to 8 per event. Without mouse tracking xterm's own handling is untouched.
+  Confirmed by feel: "feels better now"
+- README: the Chrome extension is off the roadmap; Claude Code hooks are on it

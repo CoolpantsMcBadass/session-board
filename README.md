@@ -247,8 +247,10 @@ good.
 
 ## Next steps
 
-- Serve snapshots over a localhost WebSocket so a Chrome extension can report open
-  claude.ai tabs into the same board.
+- Claude Code hooks (Notification permission_prompt/idle_prompt, Stop) reporting to a
+  local listener, so the board knows the instant a session needs you, reads exact state
+  instead of inferring it from transcripts, and can switch the dock to that session.
+  Polling stays as the backstop. Costs a global hook in ~/.claude/settings.json.
 - Wire `ask` and the links to live peer messaging rather than a fork, so a reply can
   land in a running session instead of a copy of its history.
 - Derived edges alongside hand-drawn ones: cluster by launch directory, and draw the
