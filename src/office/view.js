@@ -254,6 +254,12 @@
     el.onlostpointercapture = () => { if (drag) giveUp(); };
 
     el.onpointerup = (u) => {
+      // Where it landed is read before anything is tidied away. The bin is
+      // only displayed while a drag is on, and a hidden element measures as a
+      // zero box at 0,0: asked after the 'dragging' class came off, overBin
+      // was always false, so a ball dropped on the bin never ended anything.
+      const onTheBin = overBin(u);
+      const onTheDock = !onTheBin && overDock(u);
       const was = drag;
       drag = null;
       host.classList.remove('dragging');
@@ -268,8 +274,8 @@
       if (!was) return;
       // Never moved: this was a click, and a click picks the session.
       if (!was.moved) { if (onPick) onPick(sessionId); return; }
-      if (overBin(u) && onBin) onBin(sessionId);
-      else if (overDock(u) && onDock) onDock(sessionId);
+      if (onTheBin && onBin) onBin(sessionId);
+      else if (onTheDock && onDock) onDock(sessionId);
       // Dropped anywhere else, the next frame puts it back where the movement
       // layer says it belongs, which is the honest answer: a ball's place is
       // decided by what its session is doing, not by where it was left.

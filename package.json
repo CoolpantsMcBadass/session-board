@@ -1,6 +1,6 @@
 {
   "name": "session-board",
-  "version": "0.19.2",
+  "version": "0.19.3",
   "description": "Always-on-top strip showing live Claude Code sessions and whether each one is working or waiting on you, with an office view of sessions as balls on a hand-drawn floorplan",
   "main": "src/main.js",
   "scripts": {

@@ -683,3 +683,21 @@ v0.15.0 (2026-10-15): the plan's real usage limits, as bars under the header
   to 8 per event. Without mouse tracking xterm's own handling is untouched.
   Confirmed by feel: "feels better now"
 - README: the Chrome extension is off the roadmap; Claude Code hooks are on it
+
+2026-10-25  v0.19.3  the office's bin works
+
+- dropping a ball on the office's bin never ended anything, and probably never
+  had since the office got a bin (the ordering is the same back to 04e7c35).
+  On release the handler took the 'dragging' class off, which hides the bin,
+  and only then asked whether the pointer was over it; a hidden element
+  measures as a zero box at 0,0, so the answer was always no. The map's bin is
+  separate code and was fine, and SB_TEST_TRASH only exercises the map, which
+  is how this went unnoticed. The drop target is now read before anything is
+  tidied away (the dock drop gets the same treatment)
+- found with a playwright drive of a real drag in a test copy under
+  SB_TEST_TRASH (nothing signalled): pointer events all correct and the bin lit
+  under the pointer, but endWorker was never called. After the fix the same run
+  reaches end-session ("would SIGTERM pid ..."). Also checked: SIGTERM ends a
+  hosted session cleanly and tmux closes it
+- harness note: SB_TEST_TRASH also fires the map's trash test, which switches
+  the board to the map, so an office test has to switch back first
